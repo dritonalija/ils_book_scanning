@@ -1,0 +1,13 @@
+input/b_read_on.txt
+input/c_incunabula.txt
+input/d_tough_choices.txt
+input/e_so_many_books.txt
+input/f_libraries_of_the_world.txt
+input/B100_L9_D18.txt
+input/B1.5k_L20_D40.txt
+input/B4k_L30_D60.txt
+input/B12k_L45_D90.txt
+input/B50k_L400_D28.txt
+input/B100k_L600_D28.txt
+input/B120k_L80_D160.txt
+input/B300k_L95_D190.txt

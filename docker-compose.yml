@@ -1,0 +1,26 @@
+services:
+  irace:
+    build: .
+    image: ils-irace
+    volumes:
+      - ./irace_output:/app/irace_output
+      - ./output:/app/output
+    command: >
+      Rscript -e "library(irace); irace(scenario=readScenario('scenario.txt'))"
+
+  irace-test:
+    build: .
+    image: ils-irace
+    volumes:
+      - ./irace_output:/app/irace_output
+      - ./output:/app/output
+    command: >
+      Rscript -e "library(irace); irace(scenario=readScenario('scenario-test.txt'))"
+
+  solver:
+    build: .
+    image: ils-irace
+    volumes:
+      - ./output:/app/output
+    command: >
+      python3 app.py --input-dir input --output-dir output --time-limit 60

@@ -7,6 +7,7 @@ class Parser:
         self.file_path = file_path
         
     def parse(self):
+        Library._id_counter = 0
         try:
             with open(self.file_path, 'r') as file:
                 try:
