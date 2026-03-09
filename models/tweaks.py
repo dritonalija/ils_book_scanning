@@ -16,6 +16,24 @@ class Tweaks:
         "targeted_reorder": 1.7,
         "block_reinsert": 1.4,
     }
+    GROUPS = {
+        "order": {
+            "swap_signed",
+            "move_signed",
+            "swap_neighbor_libraries",
+            "reverse_segment",
+            "block_reinsert",
+        },
+        "insert": {
+            "swap_signed_with_unsigned",
+            "insert_library",
+            "remove_library",
+        },
+        "strategic": {
+            "replace_worst",
+            "targeted_reorder",
+        },
+    }
 
     @staticmethod
     def get_tweak_methods():
@@ -40,6 +58,23 @@ class Tweaks:
         funcs = [func for _, func in methods]
         probs = [weights.get(label, 0.0) for label in labels]
         return random.choices(funcs, weights=probs, k=1)[0]
+
+    @staticmethod
+    def grouped_weights(order_scale=1.0, insert_scale=1.0, strategic_scale=1.0):
+        scales = {
+            "order": order_scale,
+            "insert": insert_scale,
+            "strategic": strategic_scale,
+        }
+        weights = {}
+        for label, base in Tweaks.DEFAULT_WEIGHTS.items():
+            scale = 1.0
+            for group_name, members in Tweaks.GROUPS.items():
+                if label in members:
+                    scale = scales[group_name]
+                    break
+            weights[label] = max(0.0, base * scale)
+        return weights
 
     @staticmethod
     def _clone_order(solution):

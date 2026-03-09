@@ -55,12 +55,20 @@ def main():
         }
 
         float_params = {
-            'accept_worse_prob', 'weighted_beta', 'grasp_rcl',
+            'accept_worse_prob', 'grasp_rcl', 'grasp_max_time',
             'perturb_replace_bias', 'restart_fresh_probability',
+            'ls_order_weight', 'ls_insert_weight', 'ls_strategic_weight',
         }
         int_params = {
             'restart_threshold', 'perturb_strength_base',
             'perturb_strength_growth', 'local_no_improve_limit',
+        }
+        alpha_pool_map = {
+            'default': [0.5, 1.0, 1.5, 2.0],
+            'wide': [0.5, 1.0, 1.5, 2.0, 3.0],
+            'dense': [0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
+            'signup': [0.75, 1.0, 1.5, 2.0, 3.0],
+            'explore': [0.4, 0.5, 0.75, 1.0, 1.5, 2.0],
         }
 
         for key, val in params.items():
@@ -68,6 +76,8 @@ def main():
                 kwargs[key] = float(val)
             elif key in int_params:
                 kwargs[key] = int(val)
+            elif key == 'alpha_pool':
+                kwargs['alpha_values'] = alpha_pool_map[val]
 
         result = solver.iterated_local_search(data, **kwargs)
         score = result.fitness_score

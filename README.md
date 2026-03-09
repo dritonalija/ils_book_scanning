@@ -49,7 +49,6 @@ The solver screens multiple candidate orders before exact rebuilding:
 - `Static Greedy cap/rare`
 - `Noisy Heap cap/raw`
 - `Noisy Heap cap/rare`
-- `Weighted Efficiency`
 - `GRASP`
 
 ### How candidate screening works
@@ -74,9 +73,9 @@ selected starts.
   current best.
 - `Noisy Heap`: same as heap greedy but with small random noise to diversify
   starts.
-- `Weighted Efficiency`: currently behaves as a fast adaptive heap-style
-  constructor. It is kept as a tunable construction family, but no longer uses
-  the old slow exact implementation.
+- `Weighted Efficiency`: implemented in the codebase for experiments and paper
+  discussion, but not used in the default competitive constructor plan because
+  it is slower than the main heap-based starts on harder instances.
 - `GRASP`: repeatedly samples from a restricted candidate list for up to
   `--grasp-max-time` seconds.
 
@@ -174,6 +173,15 @@ Their default sampling weights are:
     "block_reinsert": 1.4,
 }
 ```
+
+The solver can also scale these operators through three grouped multipliers:
+
+- `ls_order_weight`: affects reorder-style operators such as swaps, moves,
+  reversals, and block reinsertion
+- `ls_insert_weight`: affects operators that exchange signed and unsigned
+  libraries or insert/remove libraries
+- `ls_strategic_weight`: affects the more targeted operators
+  `replace_worst` and `targeted_reorder`
 
 ## ILS Main Loop
 
@@ -327,11 +335,7 @@ timestamp, elapsed_s, phase, round, current_score, best_score, event
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--alphas` | None | Explicit list of alpha values for constructors |
-| `--alpha-main` | `1.0` | Fallback alpha 1 |
-| `--alpha-secondary` | `1.5` | Fallback alpha 2 |
-| `--alpha-third` | `2.0` | Fallback alpha 3 |
-| `--alpha-fourth` | `0.6` | Fallback alpha 4 |
+| `--alphas` | `0.5 1.0 1.5 2.0` | Alpha array used by construction heuristics |
 | `--weighted-beta` | `0.12` | Weighted-efficiency beta parameter |
 | `--grasp-rcl` | `0.05` | GRASP restricted candidate list ratio |
 | `--grasp-max-time` | `5.0` | Maximum GRASP construction time |
@@ -346,6 +350,9 @@ timestamp, elapsed_s, phase, round, current_score, best_score, event
 | `--restart-threshold` | auto | Stagnant rounds before restart |
 | `--local-no-improve-limit` | auto | Stop local search after this many non-improving steps |
 | `--accept-worse-prob` | `0.04` | Base probability for accepting worse candidates |
+| `--ls-order-weight` | `1.0` | Multiplier for reorder-style local-search operators |
+| `--ls-insert-weight` | `1.0` | Multiplier for insert/exchange local-search operators |
+| `--ls-strategic-weight` | `1.0` | Multiplier for targeted local-search operators |
 
 ### Perturbation and restart parameters
 

@@ -18,6 +18,7 @@ import time
 from models.initial_solution import InitialSolution
 from models.local_search import LocalSearch
 from models.solution import Solution
+from models.tweaks import Tweaks
 
 VALID_VARIANTS = {
     'full', 'no_perturb', 'no_restart', 'no_accept',
@@ -49,6 +50,9 @@ class Solver:
         grasp_max_time=5.0,
         noisy_restarts=None,
         local_no_improve_limit=None,
+        ls_order_weight=1.0,
+        ls_insert_weight=1.0,
+        ls_strategic_weight=1.0,
         perturb_replace_bias=0.65,
         restart_fresh_probability=0.35,
         variant='full',
@@ -67,6 +71,11 @@ class Solver:
         noisy_restarts = profile["noisy_restarts"] if noisy_restarts is None else noisy_restarts
         local_no_improve_limit = profile["local_no_improve_limit"] if local_no_improve_limit is None else local_no_improve_limit
         initial_budget = min(max(1.0, init_max_time), 120.0)
+        tweak_weights = Tweaks.grouped_weights(
+            order_scale=ls_order_weight,
+            insert_scale=ls_insert_weight,
+            strategic_scale=ls_strategic_weight,
+        )
 
         if self.verbose:
             print("---------- ITERATED LOCAL SEARCH WITH RANDOM RESTARTS ----------")
@@ -88,245 +97,248 @@ class Solver:
                 'timestamp', 'elapsed_s', 'phase', 'round',
                 'current_score', 'best_score', 'event'])
 
-        # --- Timing breakdown ---
-        time_construction = 0.0
-        time_local_search = 0.0
-        time_perturbation = 0.0
+        try:
+            # --- Timing breakdown ---
+            time_construction = 0.0
+            time_local_search = 0.0
+            time_perturbation = 0.0
 
-        # =============================================
-        # Phase 1: Initial solution construction
-        # =============================================
-        t0 = time.time()
-        initial_solution, candidate_pool = InitialSolution.generate_initial_solution(
-            data,
-            max_time=initial_budget,
-            alphas=alpha_values,
-            beta=weighted_beta,
-            grasp_rcl=grasp_rcl,
-            grasp_max_time=grasp_max_time,
-            noisy_restarts=noisy_restarts,
-            verbose=self.verbose,
-        )
-        time_construction = time.time() - t0
-        initial_score = initial_solution.fitness_score
-
-        best_solution = initial_solution.clone()
-        home_base = initial_solution.clone()
-        best_label = "initial"
-
-        if csv_writer:
-            csv_writer.writerow([
-                time.time(), time_construction, 'construction', 0,
-                initial_score, initial_score, 'initial_solution'])
-
-        # =============================================
-        # Phase 2: Initial local search
-        # =============================================
-        ils_start_time = time.time()
-        initial_ls_time = self._phase_time_limit(time_limit, ils_start_time, profile, phase="initial")
-
-        t0 = time.time()
-        home_base = LocalSearch.local_search(
-            home_base, data,
-            time_limit=initial_ls_time,
-            max_iterations=profile["initial_ls_iterations"],
-            no_improve_limit=local_no_improve_limit,
-        )
-        time_local_search += time.time() - t0
-
-        if home_base.fitness_score > best_solution.fitness_score:
-            best_solution = home_base.clone()
-            best_label = "initial_local_search"
-
-        home_pool = [home_base.clone()]
-        if self.verbose:
-            print(f"Construction: {time_construction:.2f}s | "
-                  f"Score: {initial_score:,} -> {home_base.fitness_score:,}")
-
-        if csv_writer:
-            csv_writer.writerow([
-                time.time(), time.time() - ils_start_time, 'initial_ls', 0,
-                home_base.fitness_score, best_solution.fitness_score,
-                'after_initial_ls'])
-
-        # Early exit for ls_only variant
-        if variant == 'ls_only':
-            best_solution.initial_score = initial_score
-            if csv_file:
-                csv_file.close()
-            return best_solution
-
-        # =============================================
-        # Phase 3: ILS main loop
-        # =============================================
-        outer_round = 0
-        restart_count = 0
-        stagnant_rounds = 0
-
-        while time.time() - ils_start_time < time_limit and outer_round < max_iterations:
-            outer_round += 1
-
-            # --- Perturbation ---
-            if variant == 'no_perturb':
-                candidate = home_base.clone()
-            else:
-                t0 = time.time()
-                candidate = self._perturb_solution(
-                    home_base, data,
-                    strength=perturb_strength_base + stagnant_rounds * perturb_strength_growth,
-                    profile=profile,
-                    replace_bias=perturb_replace_bias,
-                )
-                time_perturbation += time.time() - t0
-
-            # --- Local search ---
-            ls_time = self._phase_time_limit(time_limit, ils_start_time, profile, phase="round")
+            # =============================================
+            # Phase 1: Initial solution construction
+            # =============================================
             t0 = time.time()
-            candidate = LocalSearch.local_search(
-                candidate, data,
-                time_limit=ls_time,
-                max_iterations=profile["round_ls_iterations"],
+            initial_solution, candidate_pool = InitialSolution.generate_initial_solution(
+                data,
+                max_time=initial_budget,
+                alphas=alpha_values,
+                beta=weighted_beta,
+                grasp_rcl=grasp_rcl,
+                grasp_max_time=grasp_max_time,
+                noisy_restarts=noisy_restarts,
+                verbose=self.verbose,
+            )
+            time_construction = time.time() - t0
+            initial_score = initial_solution.fitness_score
+
+            best_solution = initial_solution.clone()
+            home_base = initial_solution.clone()
+            best_label = "initial"
+
+            if csv_writer:
+                csv_writer.writerow([
+                    time.time(), time_construction, 'construction', 0,
+                    initial_score, initial_score, 'initial_solution'])
+
+            # =============================================
+            # Phase 2: Initial local search
+            # =============================================
+            ils_start_time = time.time()
+            initial_ls_time = self._phase_time_limit(time_limit, ils_start_time, profile, phase="initial")
+
+            t0 = time.time()
+            home_base = LocalSearch.local_search(
+                home_base, data,
+                time_limit=initial_ls_time,
+                max_iterations=profile["initial_ls_iterations"],
                 no_improve_limit=local_no_improve_limit,
+                tweak_weights=tweak_weights,
             )
             time_local_search += time.time() - t0
 
-            # --- Update global best ---
-            if candidate.fitness_score > best_solution.fitness_score:
-                best_solution = candidate.clone()
-                best_label = f"round_{outer_round}"
-                stagnant_rounds = 0
-                if self.verbose:
-                    t = time.time() - ils_start_time
-                    print(f"  [Round {outer_round:>4d}] New best: "
-                          f"{best_solution.fitness_score:,} (t={t:.1f}s)")
-                if csv_writer:
-                    csv_writer.writerow([
-                        time.time(), time.time() - ils_start_time,
-                        'ils', outer_round,
-                        candidate.fitness_score, best_solution.fitness_score,
-                        'new_best'])
+            if home_base.fitness_score > best_solution.fitness_score:
+                best_solution = home_base.clone()
+                best_label = "initial_local_search"
 
-            # --- Acceptance criterion ---
-            if variant == 'random_walk':
-                accepted = True
-            elif variant == 'no_accept':
-                accepted = candidate.fitness_score >= home_base.fitness_score
-            else:
-                accepted = self._accept_candidate(
-                    candidate, home_base, accept_worse_prob, stagnant_rounds)
+            home_pool = [home_base.clone()]
+            if self.verbose:
+                print(f"Construction: {time_construction:.2f}s | "
+                      f"Score: {initial_score:,} -> {home_base.fitness_score:,}")
 
-            if accepted:
-                improved_home = candidate.fitness_score >= home_base.fitness_score
-                if self.verbose and improved_home and candidate.fitness_score > home_base.fitness_score:
-                    print(f"  [Round {outer_round:>4d}] Home base: "
-                          f"{candidate.fitness_score:,}")
-                home_base = candidate.clone()
-                self._push_pool(home_pool, home_base, pool_size)
-                stagnant_rounds = 0 if improved_home else stagnant_rounds + 1
-            else:
-                stagnant_rounds += 1
-
-            if self.verbose and outer_round % 5 == 0:
-                t = time.time() - ils_start_time
-                print(
-                    f"  [Round {outer_round:>4d}] home={home_base.fitness_score:,} | "
-                    f"best={best_solution.fitness_score:,} | "
-                    f"restarts={restart_count} | stag={stagnant_rounds} | t={t:.1f}s")
-
-            if csv_writer and outer_round % 5 == 0:
+            if csv_writer:
                 csv_writer.writerow([
-                    time.time(), time.time() - ils_start_time,
-                    'ils', outer_round,
+                    time.time(), time.time() - ils_start_time, 'initial_ls', 0,
                     home_base.fitness_score, best_solution.fitness_score,
-                    'status'])
+                    'after_initial_ls'])
 
-            # --- Restart on stagnation ---
-            if variant != 'no_restart' and stagnant_rounds >= restart_threshold:
-                remaining_budget = time_limit - (time.time() - ils_start_time)
-                if remaining_budget <= 0:
-                    break
-                restart_init_budget = min(
-                    profile["restart_init_max_time"],
-                    remaining_budget * 0.3)
-                restart_label, restart_state = self._restart_state(
-                    candidate_pool, home_pool, data, profile,
-                    restart_fresh_probability,
-                    alpha_values=alpha_values,
-                    weighted_beta=weighted_beta,
-                    grasp_rcl=grasp_rcl,
-                    grasp_max_time=min(grasp_max_time, restart_init_budget * 0.5),
-                    noisy_restarts=noisy_restarts,
-                    init_max_time=restart_init_budget,
-                )
-                restart_count += 1
-                restart_time = self._phase_time_limit(
-                    time_limit, ils_start_time, profile, phase="restart")
+            # Early exit for ls_only variant
+            if variant == 'ls_only':
+                best_solution.initial_score = initial_score
+                return best_solution
 
+            # =============================================
+            # Phase 3: ILS main loop
+            # =============================================
+            outer_round = 0
+            restart_count = 0
+            stagnant_rounds = 0
+
+            while time.time() - ils_start_time < time_limit and outer_round < max_iterations:
+                outer_round += 1
+
+                # --- Perturbation ---
+                if variant == 'no_perturb':
+                    candidate = home_base.clone()
+                else:
+                    t0 = time.time()
+                    candidate = self._perturb_solution(
+                        home_base, data,
+                        strength=perturb_strength_base + stagnant_rounds * perturb_strength_growth,
+                        profile=profile,
+                        replace_bias=perturb_replace_bias,
+                    )
+                    time_perturbation += time.time() - t0
+
+                # --- Local search ---
+                ls_time = self._phase_time_limit(time_limit, ils_start_time, profile, phase="round")
                 t0 = time.time()
-                restart_state = LocalSearch.local_search(
-                    restart_state, data,
-                    time_limit=restart_time,
-                    max_iterations=profile["restart_ls_iterations"],
-                    no_improve_limit=max(
-                        profile["restart_no_improve_limit_floor"],
-                        local_no_improve_limit // 2),
+                candidate = LocalSearch.local_search(
+                    candidate, data,
+                    time_limit=ls_time,
+                    max_iterations=profile["round_ls_iterations"],
+                    no_improve_limit=local_no_improve_limit,
+                    tweak_weights=tweak_weights,
                 )
                 time_local_search += time.time() - t0
 
-                if self.verbose:
-                    print(f"  [Restart {restart_count}] {restart_label} -> "
-                          f"{restart_state.fitness_score:,}")
-                if restart_state.fitness_score > best_solution.fitness_score:
-                    best_solution = restart_state.clone()
-                    best_label = f"restart_{restart_count}"
+                # --- Update global best ---
+                if candidate.fitness_score > best_solution.fitness_score:
+                    best_solution = candidate.clone()
+                    best_label = f"round_{outer_round}"
+                    stagnant_rounds = 0
                     if self.verbose:
-                        print(f"  [Restart {restart_count}] New best: "
-                              f"{best_solution.fitness_score:,}")
+                        t = time.time() - ils_start_time
+                        print(f"  [Round {outer_round:>4d}] New best: "
+                              f"{best_solution.fitness_score:,} (t={t:.1f}s)")
+                    if csv_writer:
+                        csv_writer.writerow([
+                            time.time(), time.time() - ils_start_time,
+                            'ils', outer_round,
+                            candidate.fitness_score, best_solution.fitness_score,
+                            'new_best'])
 
-                if csv_writer:
+                # --- Acceptance criterion ---
+                if variant == 'random_walk':
+                    accepted = True
+                elif variant == 'no_accept':
+                    accepted = candidate.fitness_score >= home_base.fitness_score
+                else:
+                    accepted = self._accept_candidate(
+                        candidate, home_base, accept_worse_prob, stagnant_rounds)
+
+                if accepted:
+                    improved_home = candidate.fitness_score > home_base.fitness_score
+                    if self.verbose and improved_home:
+                        print(f"  [Round {outer_round:>4d}] Home base: "
+                              f"{candidate.fitness_score:,}")
+                    home_base = candidate.clone()
+                    self._push_pool(home_pool, home_base, pool_size)
+                    stagnant_rounds = 0 if improved_home else stagnant_rounds + 1
+                else:
+                    stagnant_rounds += 1
+
+                if self.verbose and outer_round % 5 == 0:
+                    t = time.time() - ils_start_time
+                    print(
+                        f"  [Round {outer_round:>4d}] home={home_base.fitness_score:,} | "
+                        f"best={best_solution.fitness_score:,} | "
+                        f"restarts={restart_count} | stag={stagnant_rounds} | t={t:.1f}s")
+
+                if csv_writer and outer_round % 5 == 0:
                     csv_writer.writerow([
                         time.time(), time.time() - ils_start_time,
-                        'restart', restart_count,
-                        restart_state.fitness_score,
-                        best_solution.fitness_score, 'restart'])
+                        'ils', outer_round,
+                        home_base.fitness_score, best_solution.fitness_score,
+                        'status'])
 
-                home_base = restart_state.clone()
-                self._push_pool(home_pool, home_base, pool_size)
-                stagnant_rounds = 0
+                # --- Restart on stagnation ---
+                if variant != 'no_restart' and stagnant_rounds >= restart_threshold:
+                    remaining_budget = time_limit - (time.time() - ils_start_time)
+                    if remaining_budget <= 0:
+                        break
+                    restart_init_budget = min(
+                        profile["restart_init_max_time"],
+                        remaining_budget * 0.3)
+                    restart_label, restart_state = self._restart_state(
+                        candidate_pool, home_pool, data, profile,
+                        restart_fresh_probability,
+                        alpha_values=alpha_values,
+                        weighted_beta=weighted_beta,
+                        grasp_rcl=grasp_rcl,
+                        grasp_max_time=min(grasp_max_time, restart_init_budget * 0.5),
+                        noisy_restarts=noisy_restarts,
+                        init_max_time=restart_init_budget,
+                    )
+                    restart_count += 1
+                    restart_time = self._phase_time_limit(
+                        time_limit, ils_start_time, profile, phase="restart")
 
-        total_time = time.time() - ils_start_time
+                    t0 = time.time()
+                    restart_state = LocalSearch.local_search(
+                        restart_state, data,
+                        time_limit=restart_time,
+                        max_iterations=profile["restart_ls_iterations"],
+                        no_improve_limit=max(
+                            profile["restart_no_improve_limit_floor"],
+                            local_no_improve_limit // 2),
+                        tweak_weights=tweak_weights,
+                    )
+                    time_local_search += time.time() - t0
 
-        # =============================================
-        # Summary
-        # =============================================
-        best_solution.initial_score = initial_score
-        improvement = ((best_solution.fitness_score - initial_score) /
-                        initial_score * 100) if initial_score > 0 else 0
+                    if self.verbose:
+                        print(f"  [Restart {restart_count}] {restart_label} -> "
+                              f"{restart_state.fitness_score:,}")
+                    if restart_state.fitness_score > best_solution.fitness_score:
+                        best_solution = restart_state.clone()
+                        best_label = f"restart_{restart_count}"
+                        if self.verbose:
+                            print(f"  [Restart {restart_count}] New best: "
+                                  f"{best_solution.fitness_score:,}")
 
-        if self.verbose:
-            print(f"\n{'=' * 60}")
-            print(f"  Variant: {variant}")
-            print(f"  Rounds: {outer_round} | Restarts: {restart_count}")
-            print(f"  Initial: {initial_score:,} | "
-                  f"Final: {best_solution.fitness_score:,} "
-                  f"(+{improvement:.2f}%)")
-            print(f"  Best found at: {best_label}")
-            print(f"  Time breakdown:")
-            print(f"    Construction:  {time_construction:.2f}s")
-            print(f"    Local search:  {time_local_search:.2f}s")
-            print(f"    Perturbation:  {time_perturbation:.2f}s")
-            print(f"    Total ILS:     {total_time:.2f}s")
-            print(f"{'=' * 60}")
+                    if csv_writer:
+                        csv_writer.writerow([
+                            time.time(), time.time() - ils_start_time,
+                            'restart', restart_count,
+                            restart_state.fitness_score,
+                            best_solution.fitness_score, 'restart'])
 
-        if csv_writer:
-            csv_writer.writerow([
-                time.time(), total_time, 'final', outer_round,
-                best_solution.fitness_score, best_solution.fitness_score,
-                f'done_{best_label}'])
-        if csv_file:
-            csv_file.close()
+                    home_base = restart_state.clone()
+                    self._push_pool(home_pool, home_base, pool_size)
+                    stagnant_rounds = 0
 
-        return best_solution
+            total_time = time.time() - ils_start_time
+
+            # =============================================
+            # Summary
+            # =============================================
+            best_solution.initial_score = initial_score
+            improvement = ((best_solution.fitness_score - initial_score) /
+                            initial_score * 100) if initial_score > 0 else 0
+
+            if self.verbose:
+                print(f"\n{'=' * 60}")
+                print(f"  Variant: {variant}")
+                print(f"  Rounds: {outer_round} | Restarts: {restart_count}")
+                print(f"  Initial: {initial_score:,} | "
+                      f"Final: {best_solution.fitness_score:,} "
+                      f"(+{improvement:.2f}%)")
+                print(f"  Best found at: {best_label}")
+                print(f"  Time breakdown:")
+                print(f"    Construction:  {time_construction:.2f}s")
+                print(f"    Local search:  {time_local_search:.2f}s")
+                print(f"    Perturbation:  {time_perturbation:.2f}s")
+                print(f"    Total ILS:     {total_time:.2f}s")
+                print(f"{'=' * 60}")
+
+            if csv_writer:
+                csv_writer.writerow([
+                    time.time(), total_time, 'final', outer_round,
+                    best_solution.fitness_score, best_solution.fitness_score,
+                    f'done_{best_label}'])
+
+            return best_solution
+        finally:
+            if csv_file:
+                csv_file.close()
 
     # =============================================
     # Helper methods (unchanged logic)
@@ -342,9 +354,9 @@ class Solver:
             "restart": profile["restart_ls_time"],
         }[phase]
         reserve_ratio = {
-            "initial": 0.10,
-            "round": 0.04,
-            "restart": 0.06,
+            "initial": 0.18,
+            "round": 0.08,
+            "restart": 0.12,
         }[phase]
         return min(base, max(0.05, remaining * reserve_ratio))
 
@@ -397,26 +409,28 @@ class Solver:
         if not top_candidates:
             return solution.clone()
 
-        removed_positions = []
-        new_order = []
-        for idx, lib_id in enumerate(order):
-            if lib_id in weak_ids and idx < len(solution.signed_libraries):
-                removed_positions.append(len(new_order))
-            else:
-                new_order.append(lib_id)
-
+        replacements = []
         inserted = set()
-        for pos in removed_positions:
-            candidate_id = None
-            for lib_id in top_candidates:
-                if lib_id not in inserted and lib_id in new_order:
-                    candidate_id = lib_id
-                    break
-            if candidate_id is None:
+        for lib_id in top_candidates:
+            if lib_id in inserted or lib_id not in order:
                 continue
-            new_order.remove(candidate_id)
-            new_order.insert(min(pos, len(new_order)), candidate_id)
-            inserted.add(candidate_id)
+            replacements.append(lib_id)
+            inserted.add(lib_id)
+            if len(replacements) >= len(weak_libs):
+                break
+
+        if not replacements:
+            return solution.clone()
+
+        new_order = order.copy()
+        ordered_weak = sorted(weak_libs, key=lambda item: item["position"])
+        for weak, replacement_id in zip(ordered_weak, replacements):
+            weak_idx = new_order.index(weak["lib_id"])
+            replacement_idx = new_order.index(replacement_id)
+            new_order[weak_idx], new_order[replacement_idx] = (
+                new_order[replacement_idx],
+                new_order[weak_idx],
+            )
 
         return Solution.from_order(new_order, data)
 
@@ -534,12 +548,12 @@ class Solver:
                 "perturb_strength_growth": 3,
                 "noisy_restarts": 0,
                 "local_no_improve_limit": 120,
-                "initial_ls_iterations": 700,
-                "round_ls_iterations": 500,
-                "restart_ls_iterations": 350,
-                "initial_ls_time": 0.8,
-                "round_ls_time": 0.35,
-                "restart_ls_time": 0.5,
+                "initial_ls_iterations": 900,
+                "round_ls_iterations": 650,
+                "restart_ls_iterations": 450,
+                "initial_ls_time": 1.1,
+                "round_ls_time": 0.5,
+                "restart_ls_time": 0.7,
                 "restart_no_improve_limit_floor": 80,
                 "restart_init_max_time": 20.0,
                 "reorder_segment_cap": 20,
@@ -556,14 +570,14 @@ class Solver:
                 "perturb_strength_base": 6,
                 "perturb_strength_growth": 2,
                 "noisy_restarts": 1,
-                "local_no_improve_limit": 180,
-                "initial_ls_iterations": 1100,
-                "round_ls_iterations": 800,
-                "restart_ls_iterations": 600,
-                "initial_ls_time": 1.2,
-                "round_ls_time": 0.6,
-                "restart_ls_time": 0.8,
-                "restart_no_improve_limit_floor": 100,
+                "local_no_improve_limit": 220,
+                "initial_ls_iterations": 1400,
+                "round_ls_iterations": 1000,
+                "restart_ls_iterations": 750,
+                "initial_ls_time": 1.8,
+                "round_ls_time": 0.9,
+                "restart_ls_time": 1.2,
+                "restart_no_improve_limit_floor": 120,
                 "restart_init_max_time": 30.0,
                 "reorder_segment_cap": 18,
                 "shuffle_segment_cap": 9,
@@ -579,14 +593,14 @@ class Solver:
                 "perturb_strength_base": 4,
                 "perturb_strength_growth": 2,
                 "noisy_restarts": 2,
-                "local_no_improve_limit": 260,
-                "initial_ls_iterations": 1800,
-                "round_ls_iterations": 1200,
-                "restart_ls_iterations": 900,
-                "initial_ls_time": 1.8,
-                "round_ls_time": 0.9,
-                "restart_ls_time": 1.1,
-                "restart_no_improve_limit_floor": 120,
+                "local_no_improve_limit": 320,
+                "initial_ls_iterations": 2400,
+                "round_ls_iterations": 1700,
+                "restart_ls_iterations": 1200,
+                "initial_ls_time": 2.6,
+                "round_ls_time": 1.3,
+                "restart_ls_time": 1.6,
+                "restart_no_improve_limit_floor": 150,
                 "restart_init_max_time": 45.0,
                 "reorder_segment_cap": 14,
                 "shuffle_segment_cap": 8,
@@ -602,12 +616,12 @@ class Solver:
             "perturb_strength_growth": 1,
             "noisy_restarts": 3,
             "local_no_improve_limit": 320,
-            "initial_ls_iterations": 2600,
-            "round_ls_iterations": 1800,
-            "restart_ls_iterations": 1200,
-            "initial_ls_time": 2.5,
-            "round_ls_time": 1.2,
-            "restart_ls_time": 1.6,
+            "initial_ls_iterations": 3200,
+            "round_ls_iterations": 2200,
+            "restart_ls_iterations": 1500,
+            "initial_ls_time": 3.2,
+            "round_ls_time": 1.6,
+            "restart_ls_time": 2.0,
             "restart_no_improve_limit_floor": 140,
             "restart_init_max_time": 60.0,
             "reorder_segment_cap": 10,

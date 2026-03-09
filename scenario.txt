@@ -1,5 +1,5 @@
 parameterFile = "parameters.txt"
 trainInstancesFile = "instances.txt"
 targetRunner = "./target-runner.sh"
-maxExperiments = 500
+maxExperiments = 600
 logFile = "irace_output/irace.Rdata"

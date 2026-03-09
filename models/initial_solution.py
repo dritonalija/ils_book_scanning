@@ -22,7 +22,7 @@ class InitialSolution:
 
             warmup_jit(data.to_flat_arrays())
         start_time = time.time()
-        alphas = alphas or [1.0, 1.5, 2.0, 0.6]
+        alphas = alphas or [0.5, 1.0, 1.5, 2.0]
         screened_candidates = []
 
         if verbose:
@@ -83,7 +83,7 @@ class InitialSolution:
 
     @staticmethod
     def generate_adaptive_restart_solution(data, alphas=None):
-        alphas = alphas or [1.0, 1.5, 2.0, 0.6]
+        alphas = alphas or [0.5, 1.0, 1.5, 2.0]
         alpha = random.choice(alphas)
         potential_mode = random.choice(["top_raw", "top_rare", "cap_raw", "cap_rare"])
         noise = random.uniform(0.03, 0.10)
@@ -361,10 +361,12 @@ class InitialSolution:
 
     @staticmethod
     def _build_order_weighted_efficiency(data, alpha=1.0, beta=0.12):
-        return InitialSolution._build_order_adaptive_heap(
+        return InitialSolution._build_order_greedy_heap(
             data,
             alpha=alpha,
-            potential_mode="cap_raw",
+            capacity_aware=True,
+            rarity_weighted=False,
+            beta=beta,
         )
 
     @staticmethod
@@ -559,11 +561,6 @@ class InitialSolution:
                     f"Noisy Heap cap/rare alpha={weighted_alpha}",
                     InitialSolution._build_order_adaptive_heap,
                     {"alpha": weighted_alpha, "potential_mode": "cap_rare", "noise": 0.04},
-                ),
-                (
-                    f"Weighted Efficiency alpha={weighted_alpha} beta={beta}",
-                    InitialSolution._build_order_weighted_efficiency,
-                    {"alpha": weighted_alpha, "beta": beta},
                 ),
             ]
         )

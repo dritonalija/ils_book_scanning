@@ -11,10 +11,6 @@ def run_instance(args, input_path, output_path):
     data = parser.parse()
     solver = Solver(seed=args.seed, verbose=not args.quiet)
     alpha_values = args.alphas
-    if alpha_values is None:
-        alpha_values = [
-            args.alpha_main, args.alpha_secondary,
-            args.alpha_third, args.alpha_fourth]
 
     log_csv = None
     if args.log_csv:
@@ -37,6 +33,9 @@ def run_instance(args, input_path, output_path):
         grasp_max_time=args.grasp_max_time,
         noisy_restarts=args.noisy_restarts,
         local_no_improve_limit=args.local_no_improve_limit,
+        ls_order_weight=args.ls_order_weight,
+        ls_insert_weight=args.ls_insert_weight,
+        ls_strategic_weight=args.ls_strategic_weight,
         perturb_replace_bias=args.perturb_replace_bias,
         restart_fresh_probability=args.restart_fresh_probability,
         variant=args.variant,
@@ -70,17 +69,17 @@ def main():
     parser.add_argument("--grasp-max-time", type=float, default=5.0)
     parser.add_argument("--noisy-restarts", type=int, default=None)
     parser.add_argument("--local-no-improve-limit", type=int, default=None)
+    parser.add_argument("--ls-order-weight", type=float, default=1.0)
+    parser.add_argument("--ls-insert-weight", type=float, default=1.0)
+    parser.add_argument("--ls-strategic-weight", type=float, default=1.0)
     parser.add_argument("--perturb-replace-bias", type=float, default=0.65)
     parser.add_argument("--restart-fresh-probability", type=float, default=0.35)
     parser.add_argument("--seed", type=int, default=54)
     parser.add_argument("--validate", action="store_true",
                         help="Validate outputs after generation")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--alphas", type=float, nargs="*", default=None)
-    parser.add_argument("--alpha-main", type=float, default=1.0)
-    parser.add_argument("--alpha-secondary", type=float, default=1.5)
-    parser.add_argument("--alpha-third", type=float, default=2.0)
-    parser.add_argument("--alpha-fourth", type=float, default=0.6)
+    parser.add_argument("--alphas", type=float, nargs="+",
+                        default=[0.5, 1.0, 1.5, 2.0])
     parser.add_argument("--variant", type=str, default="full",
                         choices=list(Solver.__module__ and [
                             'full', 'no_perturb', 'no_restart',
