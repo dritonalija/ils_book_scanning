@@ -27,6 +27,11 @@ VALID_VARIANTS = {
 
 
 class Solver:
+    PLATEAU_GAP_THRESHOLD = 0.003
+    PLATEAU_ACCEPT_PROB = 0.20
+    MIN_WORSE_ACCEPT_SCALE = 0.05
+    STAGNATION_BOOST_WINDOW = 8.0
+
     def __init__(self, seed=None, verbose=True):
         self.verbose = verbose
         if seed is not None:
@@ -366,9 +371,13 @@ class Solver:
         if home_base.fitness_score <= 0:
             return False
         gap = (home_base.fitness_score - candidate.fitness_score) / home_base.fitness_score
-        if gap <= 0.003 and random.random() < 0.20:
+        if gap <= self.PLATEAU_GAP_THRESHOLD and random.random() < self.PLATEAU_ACCEPT_PROB:
             return True
-        probability = accept_worse_prob * max(0.05, 1.0 - gap) * (1.0 + min(1.0, stagnant_rounds / 8.0))
+        probability = (
+            accept_worse_prob
+            * max(self.MIN_WORSE_ACCEPT_SCALE, 1.0 - gap)
+            * (1.0 + min(1.0, stagnant_rounds / self.STAGNATION_BOOST_WINDOW))
+        )
         return random.random() < probability
 
     def _perturb_solution(self, solution, data, strength, profile, replace_bias):
@@ -538,7 +547,16 @@ class Solver:
         return random.choice(choices)
 
     def _instance_profile(self, data):
-        if data.num_libs >= 8000 or data.num_books >= 500000:
+        total_occurrences = sum(data.lib_num_books)
+
+        # Profile selection is based on quantities that exist in the official
+        # problem statement: number of libraries, number of days, and total
+        # book occurrences across libraries (bounded by 10^6).
+        if (
+            data.num_libs >= 15000
+            or total_occurrences >= 700000
+            or data.num_days >= 50000
+        ):
             return {
                 "name": "huge",
                 "max_iterations": 500,
@@ -561,7 +579,11 @@ class Solver:
                 "min_strength_cap": 8,
                 "strength_divisor": 5,
             }
-        if data.num_libs >= 1800 or data.num_books >= 120000:
+        if (
+            data.num_libs >= 3000
+            or total_occurrences >= 300000
+            or data.num_days >= 10000
+        ):
             return {
                 "name": "large",
                 "max_iterations": 800,
@@ -584,7 +606,11 @@ class Solver:
                 "min_strength_cap": 6,
                 "strength_divisor": 6,
             }
-        if data.num_libs >= 250 or data.num_books >= 15000:
+        if (
+            data.num_libs >= 500
+            or total_occurrences >= 100000
+            or data.num_days >= 1000
+        ):
             return {
                 "name": "medium",
                 "max_iterations": 1100,

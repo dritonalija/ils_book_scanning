@@ -6,6 +6,53 @@ from models.tweaks import Tweaks
 
 class LocalSearch:
     @staticmethod
+    def _polish_profile(data):
+        total_occurrences = sum(data.lib_num_books)
+        if (
+            data.num_libs >= 15000
+            or total_occurrences >= 700000
+            or data.num_days >= 50000
+        ):
+            return {
+                "passes": 1,
+                "prefix_limit": 18,
+                "adjacent_checks": 48,
+                "total_checks": 84,
+                "move_span": 2,
+            }
+        if (
+            data.num_libs >= 3000
+            or total_occurrences >= 300000
+            or data.num_days >= 10000
+        ):
+            return {
+                "passes": 2,
+                "prefix_limit": 24,
+                "adjacent_checks": 72,
+                "total_checks": 120,
+                "move_span": 3,
+            }
+        if (
+            data.num_libs >= 500
+            or total_occurrences >= 100000
+            or data.num_days >= 1000
+        ):
+            return {
+                "passes": 2,
+                "prefix_limit": 32,
+                "adjacent_checks": 108,
+                "total_checks": 180,
+                "move_span": 3,
+            }
+        return {
+            "passes": 2,
+            "prefix_limit": 40,
+            "adjacent_checks": 132,
+            "total_checks": 220,
+            "move_span": 4,
+        }
+
+    @staticmethod
     def local_search(
         solution,
         data,
@@ -43,11 +90,12 @@ class LocalSearch:
     @staticmethod
     def _polish_solution(solution, data, deadline):
         current = solution
+        profile = LocalSearch._polish_profile(data)
         passes = 0
-        while passes < 2 and time.time() < deadline:
+        while passes < profile["passes"] and time.time() < deadline:
             passes += 1
             signed_count = len(current.signed_libraries)
-            prefix_limit = min(signed_count, 24 if data.num_libs >= 2000 else 36)
+            prefix_limit = min(signed_count, profile["prefix_limit"])
             if prefix_limit < 2:
                 break
 
@@ -56,7 +104,7 @@ class LocalSearch:
             checks = 0
 
             for i in range(prefix_limit - 1):
-                if time.time() >= deadline or checks >= 96:
+                if time.time() >= deadline or checks >= profile["adjacent_checks"]:
                     break
                 order = base_order.copy()
                 order[i], order[i + 1] = order[i + 1], order[i]
@@ -65,14 +113,14 @@ class LocalSearch:
                 if candidate.fitness_score > best_candidate.fitness_score:
                     best_candidate = candidate
 
-            move_span = 3
+            move_span = profile["move_span"]
             for i in range(prefix_limit):
-                if time.time() >= deadline or checks >= 160:
+                if time.time() >= deadline or checks >= profile["total_checks"]:
                     break
                 left = max(0, i - move_span)
                 right = min(prefix_limit - 1, i + move_span)
                 for j in range(left, right + 1):
-                    if i == j or time.time() >= deadline or checks >= 160:
+                    if i == j or time.time() >= deadline or checks >= profile["total_checks"]:
                         continue
                     order = base_order.copy()
                     lib_id = order.pop(i)

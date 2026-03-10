@@ -34,8 +34,7 @@ main ILS loop.
 
 ## Initial Solution Phase
 
-The initializer is implemented in
-[models/initial_solution.py](/d:/FIEK-Master%2024-25/Semestri%202/Algoritmet%20e%20inspiruara%20nga%20natyra/ils_book_scanning/models/initial_solution.py).
+The initializer is implemented in `models/initial_solution.py`.
 
 ### Constructors currently tried
 
@@ -73,8 +72,8 @@ selected starts.
   current best.
 - `Noisy Heap`: same as heap greedy but with small random noise to diversify
   starts.
-- `Weighted Efficiency`: implemented in the codebase for experiments and paper
-  discussion, but not used in the default competitive constructor plan because
+- `Weighted Efficiency`: implemented in the codebase for experiments, but not
+  used in the default competitive constructor plan because
   it is slower than the main heap-based starts on harder instances.
 - `GRASP`: repeatedly samples from a restricted candidate list for up to
   `--grasp-max-time` seconds.
@@ -82,7 +81,7 @@ selected starts.
 ### Potential modes
 
 Several constructors use precomputed library potentials from
-[models/instance_data.py](/d:/FIEK-Master%2024-25/Semestri%202/Algoritmet%20e%20inspiruara%20nga%20natyra/ils_book_scanning/models/instance_data.py):
+`models/instance_data.py`:
 
 - `top/raw`: top high-score books
 - `top/rare`: top books with rarity bonus
@@ -104,10 +103,8 @@ running a full exact rebuild for every candidate.
 
 ## Exact Evaluation And Numba
 
-Evaluation is implemented in
-[models/evaluation.py](/d:/FIEK-Master%2024-25/Semestri%202/Algoritmet%20e%20inspiruara%20nga%20natyra/ils_book_scanning/models/evaluation.py)
-and used through
-[models/solution.py](/d:/FIEK-Master%2024-25/Semestri%202/Algoritmet%20e%20inspiruara%20nga%20natyra/ils_book_scanning/models/solution.py).
+Evaluation is implemented in `models/evaluation.py`
+and used through `models/solution.py`.
 
 Important detail: the JIT path is exact. It follows the same global
 book-assignment logic as the Python solution rebuild, not an approximate
@@ -123,8 +120,7 @@ If `numba` is unavailable, the solver falls back to pure Python rebuilds.
 
 ## Local Search
 
-Local search is implemented in
-[models/local_search.py](/d:/FIEK-Master%2024-25/Semestri%202/Algoritmet%20e%20inspiruara%20nga%20natyra/ils_book_scanning/models/local_search.py).
+Local search is implemented in `models/local_search.py`.
 
 It is a first-improvement hill climber:
 
@@ -134,15 +130,14 @@ It is a first-improvement hill climber:
 - stop when time runs out, iteration cap is hit, or the no-improvement limit is reached
 
 After the randomized phase, a small deterministic polish pass is applied if
-time remains. That pass tries:
+time remains. Its budget is scaled by instance size, and it tries:
 
 - adjacent swaps in the signed prefix
 - short reinsertion moves in the signed prefix
 
 ### Tweak operators
 
-The operators are defined in
-[models/tweaks.py](/d:/FIEK-Master%2024-25/Semestri%202/Algoritmet%20e%20inspiruara%20nga%20natyra/ils_book_scanning/models/tweaks.py).
+The operators are defined in `models/tweaks.py`.
 
 Current operators:
 
@@ -185,8 +180,7 @@ The solver can also scale these operators through three grouped multipliers:
 
 ## ILS Main Loop
 
-The ILS engine is implemented in
-[models/solver.py](/d:/FIEK-Master%2024-25/Semestri%202/Algoritmet%20e%20inspiruara%20nga%20natyra/ils_book_scanning/models/solver.py).
+The ILS engine is implemented in `models/solver.py`.
 
 For each round:
 
@@ -208,7 +202,9 @@ Otherwise:
 accept_worse_prob * max(0.05, 1 - gap) * (1 + min(1, stagnant_rounds / 8))
 ```
 
-This gives small flexibility near plateaus while still favoring quality.
+This gives small flexibility near plateaus while still favoring quality. In the
+code, these constants are named and treated as a stagnation-aware probabilistic
+acceptance rule rather than an unnamed ad hoc condition.
 
 ## Perturbation
 
@@ -256,7 +252,14 @@ the new home base.
 
 ## Instance Profiles
 
-The solver chooses a profile automatically from instance size:
+The solver chooses a profile automatically from instance size. The selection is
+based on problem-statement-consistent features:
+
+- number of libraries
+- number of days
+- total book occurrences across all libraries
+
+The profiles are:
 
 - `small`
 - `medium`
@@ -312,6 +315,45 @@ This writes one CSV per instance with:
 ```text
 timestamp, elapsed_s, phase, round, current_score, best_score, event
 ```
+
+## Docker Usage
+
+The repository includes a Docker setup for both solver runs and iRace tuning.
+
+Build the image:
+
+```bash
+docker compose build
+```
+
+Run the small iRace test scenario:
+
+```bash
+docker compose run --rm irace-test
+```
+
+Run the full iRace scenario:
+
+```bash
+docker compose run --rm irace
+```
+
+Run the solver in batch mode inside Docker:
+
+```bash
+docker compose run --rm solver
+```
+
+The Docker services are defined in:
+
+- `Dockerfile`
+- `docker-compose.yml`
+- `target-runner.sh`
+
+Outputs are written to:
+
+- `irace_output/` for iRace artifacts
+- `output/` for solver outputs
 
 ## CLI Parameters
 
