@@ -15,6 +15,9 @@ import os
 import random
 import time
 
+import numpy as np
+
+from models.evaluation import fast_evaluate_sequential
 from models.initial_solution import InitialSolution
 from models.local_search import LocalSearch
 from models.solution import Solution
@@ -31,6 +34,8 @@ class Solver:
     PLATEAU_ACCEPT_PROB = 0.20
     MIN_WORSE_ACCEPT_SCALE = 0.05
     STAGNATION_BOOST_WINDOW = 8.0
+    RESTART_PROTECTION_GAP = 0.003
+    RESTART_PROTECTION_MULTIPLIER = 3
 
     def __init__(self, seed=None, verbose=True):
         self.verbose = verbose
@@ -40,6 +45,7 @@ class Solver:
     def iterated_local_search(
         self,
         data,
+        instance_name=None,
         time_limit=300,
         max_iterations=None,
         pool_size=None,
@@ -58,6 +64,8 @@ class Solver:
         ls_order_weight=1.0,
         ls_insert_weight=1.0,
         ls_strategic_weight=1.0,
+        operator_weights=None,
+        operators=None,
         perturb_replace_bias=0.65,
         restart_fresh_probability=0.35,
         variant='full',
@@ -76,17 +84,28 @@ class Solver:
         noisy_restarts = profile["noisy_restarts"] if noisy_restarts is None else noisy_restarts
         local_no_improve_limit = profile["local_no_improve_limit"] if local_no_improve_limit is None else local_no_improve_limit
         initial_budget = min(max(1.0, init_max_time), 120.0)
-        tweak_weights = Tweaks.grouped_weights(
+        selected_operators = None if operators is None else list(operators)
+        tweak_weights = Tweaks.build_weights(
             order_scale=ls_order_weight,
             insert_scale=ls_insert_weight,
             strategic_scale=ls_strategic_weight,
+            overrides=operator_weights,
+            enabled=selected_operators,
         )
+        if sum(tweak_weights.values()) <= 0:
+            raise ValueError("At least one enabled local-search operator must have positive weight")
 
         if self.verbose:
             print("---------- ITERATED LOCAL SEARCH WITH RANDOM RESTARTS ----------")
-            print(
-                f"Instance: {data.num_books:,} books | "
-                f"{data.num_libs:,} libs | {data.num_days:,} days")
+            if instance_name:
+                print(
+                    f"Instance: {instance_name} | "
+                    f"{data.num_books:,} books | "
+                    f"{data.num_libs:,} libs | {data.num_days:,} days")
+            else:
+                print(
+                    f"Instance: {data.num_books:,} books | "
+                    f"{data.num_libs:,} libs | {data.num_days:,} days")
             print(
                 f"Profile: {profile['name']} | Variant: {variant} | "
                 f"Init: {initial_budget:.0f}s | ILS: {time_limit:.0f}s")
@@ -107,6 +126,7 @@ class Solver:
             time_construction = 0.0
             time_local_search = 0.0
             time_perturbation = 0.0
+            time_direct_search = 0.0
 
             # =============================================
             # Phase 1: Initial solution construction
@@ -164,6 +184,37 @@ class Solver:
                     time.time(), time.time() - ils_start_time, 'initial_ls', 0,
                     home_base.fitness_score, best_solution.fitness_score,
                     'after_initial_ls'])
+
+            remaining_after_initial = max(0.0, time_limit - (time.time() - ils_start_time))
+            direct_search_time = self._direct_phase_time_limit(
+                data, profile, remaining_after_initial)
+            if direct_search_time > 0.0:
+                t0 = time.time()
+                direct_solution, direct_iterations = self._direct_intensify(
+                    home_base,
+                    data,
+                    time_limit=direct_search_time,
+                )
+                time_direct_search += time.time() - t0
+                if direct_solution.fitness_score > home_base.fitness_score:
+                    home_base = direct_solution
+                    self._push_pool(home_pool, home_base, pool_size)
+                    if home_base.fitness_score > best_solution.fitness_score:
+                        best_solution = home_base.clone()
+                        best_label = "direct_intensify"
+                    if self.verbose:
+                        print(
+                            f"Direct intensify: {home_base.initial_score or initial_score:,} -> "
+                            f"{home_base.fitness_score:,} "
+                            f"({direct_iterations} iters)"
+                        )
+                elif self.verbose:
+                    print(f"Direct intensify: no gain ({direct_iterations} iters)")
+                if csv_writer:
+                    csv_writer.writerow([
+                        time.time(), time.time() - ils_start_time, 'direct', 0,
+                        home_base.fitness_score, best_solution.fitness_score,
+                        f'direct_{direct_iterations}'])
 
             # Early exit for ls_only variant
             if variant == 'ls_only':
@@ -256,7 +307,18 @@ class Solver:
                         'status'])
 
                 # --- Restart on stagnation ---
-                if variant != 'no_restart' and stagnant_rounds >= restart_threshold:
+                effective_restart_threshold = restart_threshold
+                if best_solution.fitness_score > 0:
+                    best_gap = (
+                        best_solution.fitness_score - home_base.fitness_score
+                    ) / best_solution.fitness_score
+                    if best_gap <= self.RESTART_PROTECTION_GAP:
+                        effective_restart_threshold = max(
+                            restart_threshold + 2,
+                            restart_threshold * self.RESTART_PROTECTION_MULTIPLIER,
+                        )
+
+                if variant != 'no_restart' and stagnant_rounds >= effective_restart_threshold:
                     remaining_budget = time_limit - (time.time() - ils_start_time)
                     if remaining_budget <= 0:
                         break
@@ -321,6 +383,8 @@ class Solver:
 
             if self.verbose:
                 print(f"\n{'=' * 60}")
+                if instance_name:
+                    print(f"  Instance: {instance_name}")
                 print(f"  Variant: {variant}")
                 print(f"  Rounds: {outer_round} | Restarts: {restart_count}")
                 print(f"  Initial: {initial_score:,} | "
@@ -330,6 +394,7 @@ class Solver:
                 print(f"  Time breakdown:")
                 print(f"    Construction:  {time_construction:.2f}s")
                 print(f"    Local search:  {time_local_search:.2f}s")
+                print(f"    Direct search: {time_direct_search:.2f}s")
                 print(f"    Perturbation:  {time_perturbation:.2f}s")
                 print(f"    Total ILS:     {total_time:.2f}s")
                 print(f"{'=' * 60}")
@@ -364,6 +429,151 @@ class Solver:
             "restart": 0.12,
         }[phase]
         return min(base, max(0.05, remaining * reserve_ratio))
+
+    def _direct_phase_time_limit(self, data, profile, remaining):
+        if remaining <= 3.0:
+            return 0.0
+        dense_small_library_instance = (
+            data.num_libs <= 250 and data.num_days <= 1000
+        )
+        if dense_small_library_instance:
+            return min(28.0, remaining * 0.60)
+        if profile["name"] == "small":
+            return min(14.0, remaining * 0.40)
+        if profile["name"] == "medium" and data.num_libs <= 1200:
+            return min(10.0, remaining * 0.25)
+        return 0.0
+
+    def _direct_intensify(
+        self,
+        solution,
+        data,
+        time_limit,
+        p_swap=0.45,
+        p_insert=0.35,
+        anneal_prob=0.001,
+    ):
+        if time_limit <= 0.0:
+            return solution.clone(), 0
+
+        flat = data.to_flat_arrays() if hasattr(data, "to_flat_arrays") else None
+        if flat is None:
+            return solution.clone(), 0
+
+        current_signed = solution.signed_libraries.copy()
+        current_unsigned = solution.unsigned_libraries.copy()
+        current_score = solution.fitness_score
+        best_score = current_score
+        best_order = current_signed + current_unsigned
+
+        start_time = time.time()
+        iterations = 0
+        t_insert = p_swap + p_insert
+
+        while time.time() - start_time < time_limit:
+            iterations += 1
+            move_type = random.random()
+            undo_op = None
+            signed_count = len(current_signed)
+
+            if move_type < p_swap:
+                if signed_count >= 2:
+                    idx1, idx2 = random.sample(range(signed_count), 2)
+                    current_signed[idx1], current_signed[idx2] = (
+                        current_signed[idx2],
+                        current_signed[idx1],
+                    )
+                    undo_op = ("swap", idx1, idx2)
+            elif move_type < t_insert:
+                if current_unsigned and current_signed:
+                    delta = random.randint(-1, 1)
+                    if delta == 0:
+                        i = random.randint(0, signed_count - 1)
+                        j = random.randint(0, len(current_unsigned) - 1)
+                        orig_c = current_signed[i]
+                        orig_u = current_unsigned[j]
+                        current_signed[i] = orig_u
+                        current_unsigned[j] = orig_c
+                        undo_op = ("swap_u", i, j, orig_c, orig_u)
+                    elif delta == 1:
+                        j = random.randint(0, len(current_unsigned) - 1)
+                        lib_id = current_unsigned.pop(j)
+                        pos = random.randint(0, signed_count)
+                        current_signed.insert(pos, lib_id)
+                        undo_op = ("insert_revert", pos, j, lib_id)
+                    else:
+                        i = random.randint(0, signed_count - 1)
+                        lib_id = current_signed.pop(i)
+                        current_unsigned.append(lib_id)
+                        undo_op = ("remove_revert", i)
+                elif current_unsigned:
+                    j = random.randint(0, len(current_unsigned) - 1)
+                    lib_id = current_unsigned.pop(j)
+                    current_signed.append(lib_id)
+                    undo_op = ("insert_revert", len(current_signed) - 1, j, lib_id)
+                elif signed_count > 0:
+                    i = random.randint(0, signed_count - 1)
+                    lib_id = current_signed.pop(i)
+                    current_unsigned.append(lib_id)
+                    undo_op = ("remove_revert", i)
+            else:
+                if signed_count >= 2:
+                    i = random.randint(0, signed_count - 1)
+                    lib_id = current_signed.pop(i)
+                    j = random.randint(0, len(current_signed))
+                    current_signed.insert(j, lib_id)
+                    undo_op = ("move_revert", i, j, lib_id)
+
+            if undo_op is None:
+                continue
+
+            candidate_order = np.array(current_signed + current_unsigned, dtype=np.int32)
+            score = int(fast_evaluate_sequential(
+                candidate_order,
+                flat["libs_signup"],
+                flat["libs_rate"],
+                flat["books_flat"],
+                flat["books_offsets"],
+                flat["books_lengths"],
+                flat["book_scores"],
+                flat["total_days"],
+            ))
+            accept = score > current_score
+            if not accept and random.random() < anneal_prob:
+                accept = True
+
+            if accept:
+                current_score = score
+                if score > best_score:
+                    best_score = score
+                    best_order = list(current_signed + current_unsigned)
+            else:
+                op = undo_op[0]
+                if op == "swap":
+                    i, j = undo_op[1], undo_op[2]
+                    current_signed[i], current_signed[j] = current_signed[j], current_signed[i]
+                elif op == "swap_u":
+                    i, j, orig_c, orig_u = undo_op[1:]
+                    current_signed[i] = orig_c
+                    current_unsigned[j] = orig_u
+                elif op == "insert_revert":
+                    pos, j, lib_id = undo_op[1:]
+                    current_signed.pop(pos)
+                    current_unsigned.insert(j, lib_id)
+                elif op == "remove_revert":
+                    i = undo_op[1]
+                    lib_id = current_unsigned.pop()
+                    current_signed.insert(i, lib_id)
+                elif op == "move_revert":
+                    _, i, j, lib_id = undo_op
+                    current_signed.pop(j)
+                    current_signed.insert(i, lib_id)
+
+        if best_score <= solution.fitness_score:
+            return solution.clone(), iterations
+
+        improved = Solution.from_order(best_order, data)
+        return improved, iterations
 
     def _accept_candidate(self, candidate, home_base, accept_worse_prob, stagnant_rounds):
         if candidate.fitness_score >= home_base.fitness_score:
@@ -548,14 +758,22 @@ class Solver:
 
     def _instance_profile(self, data):
         total_occurrences = sum(data.lib_num_books)
+        dense_small_library_instance = (
+            data.num_libs <= 250 and data.num_days <= 1000
+        )
 
         # Profile selection is based on quantities that exist in the official
         # problem statement: number of libraries, number of days, and total
-        # book occurrences across libraries (bounded by 10^6).
+        # book occurrences across libraries (bounded by 10^6). Dense synthetic
+        # instances with few libraries should not be pushed into the most
+        # conservative profiles purely because their occurrence count is high.
         if (
+            not dense_small_library_instance
+            and (
             data.num_libs >= 15000
             or total_occurrences >= 700000
             or data.num_days >= 50000
+            )
         ):
             return {
                 "name": "huge",
@@ -580,9 +798,12 @@ class Solver:
                 "strength_divisor": 5,
             }
         if (
+            not dense_small_library_instance
+            and (
             data.num_libs >= 3000
             or total_occurrences >= 300000
             or data.num_days >= 10000
+            )
         ):
             return {
                 "name": "large",

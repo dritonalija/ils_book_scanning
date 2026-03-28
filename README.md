@@ -141,31 +141,33 @@ The operators are defined in `models/tweaks.py`.
 
 Current operators:
 
-- `swap_signed`
-- `swap_signed_with_unsigned`
-- `move_signed`
-- `swap_neighbor_libraries`
-- `insert_library`
 - `remove_library`
-- `reverse_segment`
-- `replace_worst`
-- `targeted_reorder`
+- `move_signed`
+- `swap_signed`
 - `block_reinsert`
+- `swap_signed_with_unsigned`
+- `reverse_segment`
+- `insert_library`
+- `swap_neighbor_libraries`
+- `critical_path_insert`
+- `diversity_swap`
+- `replace_worst`
 
 Their default sampling weights are:
 
 ```python
 {
-    "swap_signed": 1.0,
-    "swap_signed_with_unsigned": 2.5,
-    "move_signed": 1.5,
-    "swap_neighbor_libraries": 1.0,
-    "insert_library": 1.5,
-    "remove_library": 0.6,
-    "reverse_segment": 0.7,
-    "replace_worst": 1.8,
-    "targeted_reorder": 1.7,
-    "block_reinsert": 1.4,
+    "remove_library": 2.8,
+    "move_signed": 2.4,
+    "swap_signed": 2.2,
+    "block_reinsert": 1.9,
+    "swap_signed_with_unsigned": 1.6,
+    "reverse_segment": 1.3,
+    "insert_library": 1.1,
+    "swap_neighbor_libraries": 0.8,
+    "critical_path_insert": 0.7,
+    "diversity_swap": 0.6,
+    "replace_worst": 0.5,
 }
 ```
 
@@ -176,7 +178,34 @@ The solver can also scale these operators through three grouped multipliers:
 - `ls_insert_weight`: affects operators that exchange signed and unsigned
   libraries or insert/remove libraries
 - `ls_strategic_weight`: affects the more targeted operators
-  `replace_worst` and `targeted_reorder`
+  `replace_worst` and `diversity_swap`
+
+## Benchmarking Tweak Operators
+
+To compare tweak operators in isolation, use `benchmark_tweak_operators.py`.
+It builds the same base solution for every operator trial, writes a per-attempt
+CSV, and continuously rewrites an aggregated summary CSV while the run is still
+in progress.
+
+Example:
+
+```powershell
+python .\benchmark_tweak_operators.py `
+  --input-dir .\test_input `
+  --instances b_025x_010t.txt c_025x_010t.txt `
+  --attempts 20 `
+  --detailed-csv .\logs\tweak_details.csv `
+  --summary-csv .\logs\tweak_summary.csv
+```
+
+Useful outputs:
+
+- `tweak_details.csv`: one row per `(instance, attempt, operator)` trial
+- `tweak_summary.csv`: live aggregated statistics per instance and overall
+
+The summary reports how often an operator improves the base solution, its
+average score delta, its best and worst delta, and how often it actually
+changes the current order.
 
 ## ILS Main Loop
 

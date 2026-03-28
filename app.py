@@ -1,9 +1,40 @@
 import argparse
+import csv
 import os
 import random
 
 from models import Parser
 from models import Solver
+from models.tweaks import Tweaks
+
+
+def compute_improvement(initial, final):
+    return ((final - initial) / initial * 100) if initial > 0 else 0.0
+
+
+def write_summary_header(csv_writer):
+    csv_writer.writerow([
+        "instance",
+        "initial_score",
+        "final_score",
+        "improvement_pct",
+        "running_total_initial",
+        "running_total_final",
+        "running_total_improvement_pct",
+    ])
+
+
+def append_summary_row(csv_writer, file_name, initial, final,
+                       total_initial, total_final):
+    csv_writer.writerow([
+        file_name,
+        initial,
+        final,
+        f"{compute_improvement(initial, final):.6f}",
+        total_initial,
+        total_final,
+        f"{compute_improvement(total_initial, total_final):.6f}",
+    ])
 
 
 def run_instance(args, input_path, output_path):
@@ -11,14 +42,21 @@ def run_instance(args, input_path, output_path):
     data = parser.parse()
     solver = Solver(seed=args.seed, verbose=not args.quiet)
     alpha_values = args.alphas
+    instance_name = os.path.basename(input_path)
+    operator_weights = {
+        label: getattr(args, f"w_{label}")
+        for label in Tweaks.operator_labels()
+        if getattr(args, f"w_{label}") is not None
+    }
 
     log_csv = None
     if args.log_csv:
-        instance_name = os.path.splitext(os.path.basename(input_path))[0]
-        log_csv = os.path.join(args.log_csv, f"{instance_name}.csv")
+        log_stem = os.path.splitext(instance_name)[0]
+        log_csv = os.path.join(args.log_csv, f"{log_stem}.csv")
 
     result = solver.iterated_local_search(
         data,
+        instance_name=instance_name,
         time_limit=args.time_limit,
         max_iterations=args.max_iterations,
         pool_size=args.pool_size,
@@ -36,6 +74,8 @@ def run_instance(args, input_path, output_path):
         ls_order_weight=args.ls_order_weight,
         ls_insert_weight=args.ls_insert_weight,
         ls_strategic_weight=args.ls_strategic_weight,
+        operator_weights=operator_weights or None,
+        operators=args.operators,
         perturb_replace_bias=args.perturb_replace_bias,
         restart_fresh_probability=args.restart_fresh_probability,
         variant=args.variant,
@@ -72,6 +112,13 @@ def main():
     parser.add_argument("--ls-order-weight", type=float, default=1.0)
     parser.add_argument("--ls-insert-weight", type=float, default=1.0)
     parser.add_argument("--ls-strategic-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--operators",
+        nargs="+",
+        choices=Tweaks.operator_labels(),
+        default=None,
+        help="Restrict local search to this operator subset",
+    )
     parser.add_argument("--perturb-replace-bias", type=float, default=0.65)
     parser.add_argument("--restart-fresh-probability", type=float, default=0.35)
     parser.add_argument("--seed", type=int, default=54)
@@ -87,6 +134,16 @@ def main():
                         help="Algorithm variant for ablation study")
     parser.add_argument("--log-csv", type=str, default=None,
                         help="Directory for convergence CSV logs")
+    parser.add_argument("--summary-csv", type=str, default=None,
+                        help="Path to batch summary CSV updated after each instance")
+    for label in Tweaks.operator_labels():
+        parser.add_argument(
+            f"--w-{label.replace('_', '-')}",
+            dest=f"w_{label}",
+            type=float,
+            default=None,
+            help=f"Override weight for operator {label}",
+        )
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -100,34 +157,56 @@ def main():
     else:
         os.makedirs(args.output_dir, exist_ok=True)
         results = []
+        total_initial = 0
+        total_final = 0
+        summary_file = None
+        summary_writer = None
+        if args.summary_csv:
+            os.makedirs(os.path.dirname(args.summary_csv) or ".", exist_ok=True)
+            summary_file = open(args.summary_csv, "w", newline="")
+            summary_writer = csv.writer(summary_file)
+            write_summary_header(summary_writer)
+            summary_file.flush()
         print("---------- ITERATED LOCAL SEARCH WITH RANDOM RESTARTS ----------")
-        for file in sorted(os.listdir(args.input_dir)):
-            if not file.endswith(".txt"):
-                continue
-            input_path = os.path.join(args.input_dir, file)
-            output_path = os.path.join(args.output_dir, file)
-            result = run_instance(args, input_path, output_path)
-            results.append((file, result.initial_score, result.fitness_score))
-            print(f"Final score for {file}: {result.fitness_score:,}")
-            print("----------------------")
+        try:
+            for file in sorted(os.listdir(args.input_dir)):
+                if not file.endswith(".txt"):
+                    continue
+                input_path = os.path.join(args.input_dir, file)
+                output_path = os.path.join(args.output_dir, file)
+                result = run_instance(args, input_path, output_path)
+                results.append((file, result.initial_score, result.fitness_score))
+                total_initial += result.initial_score
+                total_final += result.fitness_score
+                if summary_writer:
+                    append_summary_row(
+                        summary_writer,
+                        file,
+                        result.initial_score,
+                        result.fitness_score,
+                        total_initial,
+                        total_final,
+                    )
+                    summary_file.flush()
+                print(f"Final score for {file}: {result.fitness_score:,}")
+                if args.summary_csv:
+                    print(f"Updated summary CSV: {args.summary_csv}")
+                print("----------------------")
+        finally:
+            if summary_file:
+                summary_file.close()
 
         print(f"\n{'=' * 70}")
         print(f"  Summary (variant={args.variant})")
         print(f"{'=' * 70}")
         print(f"{'Instance':<35} {'Initial':>12} {'Final':>12} {'Improv%':>10}")
         print(f"{'-' * 70}")
-        total_initial = 0
-        total_final = 0
         for file, initial, final in results:
-            improvement = ((final - initial) / initial * 100
-                           if initial > 0 else 0)
+            improvement = compute_improvement(initial, final)
             print(f"{file:<35} {initial:>12,} {final:>12,} "
                   f"{improvement:>+9.2f}%")
-            total_initial += initial
-            total_final += final
         print(f"{'-' * 70}")
-        total_imp = ((total_final - total_initial) / total_initial * 100
-                     if total_initial > 0 else 0)
+        total_imp = compute_improvement(total_initial, total_final)
         print(f"{'TOTAL':<35} {total_initial:>12,} {total_final:>12,} "
               f"{total_imp:>+9.2f}%")
         print(f"{'=' * 70}")

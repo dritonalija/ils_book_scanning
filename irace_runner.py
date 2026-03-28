@@ -44,12 +44,14 @@ def main():
 
     try:
         from models import Parser, Solver
+        from models.tweaks import Tweaks
 
         parser = Parser(instance_path)
         data = parser.parse()
         solver = Solver(seed=seed, verbose=False)
 
         kwargs = {
+            'instance_name': os.path.basename(instance_path),
             'time_limit': time_limit,
             'init_max_time': min(time_limit * 0.3, 30.0),
         }
@@ -70,6 +72,8 @@ def main():
             'signup': [0.75, 1.0, 1.5, 2.0, 3.0],
             'explore': [0.4, 0.5, 0.75, 1.0, 1.5, 2.0],
         }
+        operator_weight_keys = {f'w_{label}' for label in Tweaks.operator_labels()}
+        operator_weights = {}
 
         for key, val in params.items():
             if key in float_params:
@@ -78,6 +82,13 @@ def main():
                 kwargs[key] = int(val)
             elif key == 'alpha_pool':
                 kwargs['alpha_values'] = alpha_pool_map[val]
+            elif key == 'operators':
+                kwargs['operators'] = [item for item in val.split(',') if item]
+            elif key in operator_weight_keys:
+                operator_weights[key[2:]] = float(val)
+
+        if operator_weights:
+            kwargs['operator_weights'] = operator_weights
 
         result = solver.iterated_local_search(data, **kwargs)
         score = result.fitness_score

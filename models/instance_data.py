@@ -35,6 +35,7 @@ class InstanceData:
         self._build_potentials()
 
         self._flat = None
+        self._rebuild_workspace = None
 
     def _build_potentials(self):
         k_limit = 1000
@@ -115,20 +116,76 @@ class InstanceData:
         }
         return self._flat
 
+    def rebuild_workspace(self):
+        """
+        Reusable NumPy buffers for Solution.from_order rebuilds.
+        Avoids reallocating several O(num_books) arrays on every move.
+        """
+        if self._rebuild_workspace is None:
+            max_order = max(1, self.num_libs)
+            max_books = max(1, self.num_books)
+            self._rebuild_workspace = {
+                "signed_buffer": np.empty(max_order, dtype=np.int32),
+                "out_selected": np.empty(max_order, dtype=np.int32),
+                "out_books": np.empty(max_books, dtype=np.int32),
+                "out_book_libs": np.empty(max_books, dtype=np.int32),
+                "out_selected_global": np.empty(max_order, dtype=np.int32),
+                "out_books_global": np.empty(max_books, dtype=np.int32),
+                "out_book_libs_global": np.empty(max_books, dtype=np.int32),
+            }
+        return self._rebuild_workspace
+
+    def order_array_view(self, signed_order):
+        workspace = self.rebuild_workspace()
+        signed_buffer = workspace["signed_buffer"]
+        order_len = len(signed_order)
+        if order_len:
+            signed_buffer[:order_len] = signed_order
+        return signed_buffer[:order_len]
+
     def fast_evaluate(self, signed_order):
         """
         Evaluate a signed library ordering using Numba-accelerated code.
         Falls back to pure Python if Numba is not available.
         """
-        from models.evaluation import fast_evaluate
+        from models.evaluation import fast_evaluate, fast_evaluate_global
         flat = self.to_flat_arrays()
-        signed_arr = np.array(signed_order, dtype=np.int32)
-        return int(fast_evaluate(
+        signed_arr = self.order_array_view(signed_order)
+        sequential_score = int(fast_evaluate(
+            signed_arr, flat['libs_signup'], flat['libs_rate'],
+            flat['books_flat'], flat['books_offsets'],
+            flat['books_lengths'], flat['book_scores'],
+            flat['total_days']))
+        global_score = int(fast_evaluate_global(
             signed_arr, flat['libs_signup'], flat['libs_rate'],
             flat['lib_num_books'], flat['books_by_score'],
             flat['book_libs_flat'], flat['book_libs_offsets'],
             flat['book_libs_lengths'], flat['book_scores'],
             flat['total_days']))
+        return max(sequential_score, global_score)
+
+    def screen_evaluate(self, signed_order):
+        """
+        Cheaper screening score for local search.
+        Uses the global assignment scorer only, which tracks the current exact
+        objective better than the sequential proxy on dense instances while
+        still avoiding the second evaluation pass.
+        """
+        from models.evaluation import fast_evaluate_global
+        flat = self.to_flat_arrays()
+        signed_arr = self.order_array_view(signed_order)
+        return int(fast_evaluate_global(
+            signed_arr,
+            flat['libs_signup'],
+            flat['libs_rate'],
+            flat['lib_num_books'],
+            flat['books_by_score'],
+            flat['book_libs_flat'],
+            flat['book_libs_offsets'],
+            flat['book_libs_lengths'],
+            flat['book_scores'],
+            flat['total_days'],
+        ))
 
     def describe(self):
         print(f"Instance: {self.num_books:,} books, "

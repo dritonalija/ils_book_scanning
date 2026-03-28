@@ -74,14 +74,49 @@ class Solution:
         return self._rebuild_python(order, data)
 
     def _rebuild_fast(self, order, data, flat):
-        from models.evaluation import fast_evaluate_detailed
+        from models.evaluation import (
+            fast_evaluate_detailed,
+            fast_evaluate_detailed_global,
+        )
 
-        out_selected = np.zeros(max(1, len(order)), dtype=np.int32)
-        out_books = np.zeros(max(1, flat["n_books"]), dtype=np.int32)
-        out_book_libs = np.zeros(max(1, flat["n_books"]), dtype=np.int32)
+        workspace = data.rebuild_workspace() if hasattr(data, "rebuild_workspace") else None
+        order_len = len(order)
+        if workspace is not None:
+            signed_buffer = workspace["signed_buffer"]
+            if order_len:
+                signed_buffer[:order_len] = order
+            signed_arr = signed_buffer[:order_len]
+            out_selected = workspace["out_selected"]
+            out_books = workspace["out_books"]
+            out_book_libs = workspace["out_book_libs"]
+            out_selected_global = workspace["out_selected_global"]
+            out_books_global = workspace["out_books_global"]
+            out_book_libs_global = workspace["out_book_libs_global"]
+        else:
+            signed_arr = np.empty(order_len, dtype=np.int32)
+            if order_len:
+                signed_arr[:order_len] = order
+            out_selected = np.empty(max(1, len(order)), dtype=np.int32)
+            out_books = np.empty(max(1, flat["n_books"]), dtype=np.int32)
+            out_book_libs = np.empty(max(1, flat["n_books"]), dtype=np.int32)
+            out_selected_global = np.empty(max(1, len(order)), dtype=np.int32)
+            out_books_global = np.empty(max(1, flat["n_books"]), dtype=np.int32)
+            out_book_libs_global = np.empty(max(1, flat["n_books"]), dtype=np.int32)
 
-        signed_arr = np.array(order, dtype=np.int32)
-        score, selected_count, assigned_count = fast_evaluate_detailed(
+        seq_score, seq_selected_count, seq_assigned_count = fast_evaluate_detailed(
+            signed_arr,
+            flat["libs_signup"],
+            flat["libs_rate"],
+            flat["books_flat"],
+            flat["books_offsets"],
+            flat["books_lengths"],
+            flat["book_scores"],
+            flat["total_days"],
+            out_selected,
+            out_books,
+            out_book_libs,
+        )
+        global_score, global_selected_count, global_assigned_count = fast_evaluate_detailed_global(
             signed_arr,
             flat["libs_signup"],
             flat["libs_rate"],
@@ -92,22 +127,37 @@ class Solution:
             flat["book_libs_lengths"],
             flat["book_scores"],
             flat["total_days"],
-            out_selected,
-            out_books,
-            out_book_libs,
+            out_selected_global,
+            out_books_global,
+            out_book_libs_global,
         )
+
+        if global_score > seq_score:
+            score = global_score
+            selected_count = global_selected_count
+            assigned_count = global_assigned_count
+            selected_arr = out_selected_global
+            books_arr = out_books_global
+            book_libs_arr = out_book_libs_global
+        else:
+            score = seq_score
+            selected_count = seq_selected_count
+            assigned_count = seq_assigned_count
+            selected_arr = out_selected
+            books_arr = out_books
+            book_libs_arr = out_book_libs
 
         scanned_per_lib = {}
         scanned_books = set()
         for idx in range(assigned_count):
-            lib_id = int(out_book_libs[idx])
-            book_id = int(out_books[idx])
+            lib_id = int(book_libs_arr[idx])
+            book_id = int(books_arr[idx])
             scanned_per_lib.setdefault(lib_id, []).append(book_id)
             scanned_books.add(book_id)
 
         signed_libraries = []
         for idx in range(selected_count):
-            lib_id = int(out_selected[idx])
+            lib_id = int(selected_arr[idx])
             if scanned_per_lib.get(lib_id):
                 signed_libraries.append(lib_id)
 

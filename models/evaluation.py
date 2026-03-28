@@ -15,10 +15,45 @@ except ImportError:
 
 
 @njit(fastmath=True, cache=True)
-def fast_evaluate(order, libs_signup, libs_rate, lib_num_books, books_by_score,
-                  book_libs_flat, book_libs_offsets, book_libs_lengths,
-                  book_scores, total_days):
-    """Exact score using the same global assignment rule as the Python solver."""
+def fast_evaluate(order, libs_signup, libs_rate, books_flat, books_offsets,
+                  books_lengths, book_scores, total_days):
+    """Exact score using the official sequential library scanning rule."""
+    scanned = np.zeros(len(book_scores), dtype=np.uint8)
+    current_day = 0
+    score = np.int64(0)
+
+    for idx in range(len(order)):
+        lib_id = order[idx]
+        signup = libs_signup[lib_id]
+        if current_day + signup >= total_days:
+            continue
+
+        current_day += signup
+        remaining_days = total_days - current_day
+        capacity = remaining_days * libs_rate[lib_id]
+        if capacity <= 0:
+            continue
+
+        offset = books_offsets[lib_id]
+        length = books_lengths[lib_id]
+        taken = 0
+        for k in range(length):
+            if taken >= capacity:
+                break
+            book_id = books_flat[offset + k]
+            if scanned[book_id] == 0:
+                scanned[book_id] = 1
+                score += book_scores[book_id]
+                taken += 1
+
+    return score
+
+
+@njit(fastmath=True, cache=True)
+def fast_evaluate_global(order, libs_signup, libs_rate, lib_num_books,
+                         books_by_score, book_libs_flat, book_libs_offsets,
+                         book_libs_lengths, book_scores, total_days):
+    """Global assignment heuristic for a fixed library order."""
     num_libs = len(libs_signup)
     active = np.zeros(num_libs, dtype=np.uint8)
     remaining_capacity = np.zeros(num_libs, dtype=np.int32)
@@ -85,7 +120,47 @@ def fast_evaluate(order, libs_signup, libs_rate, lib_num_books, books_by_score,
 
 
 @njit(fastmath=True, cache=True)
-def fast_evaluate_detailed(
+def fast_evaluate_sequential(order, libs_signup, libs_rate,
+                             books_flat, books_offsets, books_lengths,
+                             book_scores, total_days):
+    """
+    Faster proxy score used for aggressive local search.
+    Books are scanned greedily in library order from each library's
+    pre-sorted book list.
+    """
+    scanned = np.zeros(len(book_scores), dtype=np.uint8)
+    current_day = 0
+    score = np.int64(0)
+
+    for idx in range(len(order)):
+        lib_id = order[idx]
+        signup = libs_signup[lib_id]
+        if current_day + signup >= total_days:
+            continue
+
+        current_day += signup
+        remaining_days = total_days - current_day
+        capacity = remaining_days * libs_rate[lib_id]
+        if capacity <= 0:
+            continue
+
+        offset = books_offsets[lib_id]
+        length = books_lengths[lib_id]
+        taken = 0
+        for k in range(length):
+            if taken >= capacity:
+                break
+            book_id = books_flat[offset + k]
+            if scanned[book_id] == 0:
+                scanned[book_id] = 1
+                score += book_scores[book_id]
+                taken += 1
+
+    return score
+
+
+@njit(fastmath=True, cache=True)
+def fast_evaluate_detailed_global(
     order,
     libs_signup,
     libs_rate,
@@ -100,7 +175,7 @@ def fast_evaluate_detailed(
     out_books,
     out_book_libs,
 ):
-    """Exact detailed evaluation with assignment output for reconstruction."""
+    """Detailed global assignment output for reconstruction."""
     num_libs = len(libs_signup)
     active = np.zeros(num_libs, dtype=np.uint8)
     remaining_capacity = np.zeros(num_libs, dtype=np.int32)
@@ -173,22 +248,91 @@ def fast_evaluate_detailed(
     return score, selected_count, assigned_count
 
 
+@njit(fastmath=True, cache=True)
+def fast_evaluate_detailed(
+    order,
+    libs_signup,
+    libs_rate,
+    books_flat,
+    books_offsets,
+    books_lengths,
+    book_scores,
+    total_days,
+    out_selected,
+    out_books,
+    out_book_libs,
+):
+    """Exact detailed evaluation with official sequential assignment output."""
+    scanned = np.zeros(len(book_scores), dtype=np.uint8)
+    current_day = 0
+    score = np.int64(0)
+    selected_count = 0
+    assigned_count = 0
+
+    for idx in range(len(order)):
+        lib_id = order[idx]
+        signup = libs_signup[lib_id]
+        if current_day + signup >= total_days:
+            continue
+
+        current_day += signup
+        remaining_days = total_days - current_day
+        capacity = remaining_days * libs_rate[lib_id]
+        if capacity <= 0:
+            continue
+
+        offset = books_offsets[lib_id]
+        length = books_lengths[lib_id]
+        taken = 0
+        start_assigned = assigned_count
+        for k in range(length):
+            if taken >= capacity:
+                break
+            book_id = books_flat[offset + k]
+            if scanned[book_id] == 0:
+                scanned[book_id] = 1
+                score += book_scores[book_id]
+                out_books[assigned_count] = book_id
+                out_book_libs[assigned_count] = lib_id
+                assigned_count += 1
+                taken += 1
+
+        if assigned_count > start_assigned:
+            out_selected[selected_count] = lib_id
+            selected_count += 1
+
+    return score, selected_count, assigned_count
+
+
 def warmup_jit(flat):
     """Trigger Numba compilation before timed runs."""
     if not HAS_NUMBA:
         return
     dummy = np.array([0], dtype=np.int32)
     fast_evaluate(dummy, flat['libs_signup'], flat['libs_rate'],
-                  flat['lib_num_books'], flat['books_by_score'],
-                  flat['book_libs_flat'], flat['book_libs_offsets'],
-                  flat['book_libs_lengths'], flat['book_scores'],
+                  flat['books_flat'], flat['books_offsets'],
+                  flat['books_lengths'], flat['book_scores'],
                   flat['total_days'])
+    fast_evaluate_global(dummy, flat['libs_signup'], flat['libs_rate'],
+                         flat['lib_num_books'], flat['books_by_score'],
+                         flat['book_libs_flat'], flat['book_libs_offsets'],
+                         flat['book_libs_lengths'], flat['book_scores'],
+                         flat['total_days'])
+    fast_evaluate_sequential(dummy, flat['libs_signup'], flat['libs_rate'],
+                             flat['books_flat'], flat['books_offsets'],
+                             flat['books_lengths'], flat['book_scores'],
+                             flat['total_days'])
     out_selected = np.zeros(1, dtype=np.int32)
     out_books = np.zeros(max(1, flat['n_books']), dtype=np.int32)
     out_book_libs = np.zeros(max(1, flat['n_books']), dtype=np.int32)
+    fast_evaluate_detailed_global(dummy, flat['libs_signup'], flat['libs_rate'],
+                                  flat['lib_num_books'], flat['books_by_score'],
+                                  flat['book_libs_flat'], flat['book_libs_offsets'],
+                                  flat['book_libs_lengths'], flat['book_scores'],
+                                  flat['total_days'],
+                                  out_selected, out_books, out_book_libs)
     fast_evaluate_detailed(dummy, flat['libs_signup'], flat['libs_rate'],
-                           flat['lib_num_books'], flat['books_by_score'],
-                           flat['book_libs_flat'], flat['book_libs_offsets'],
-                           flat['book_libs_lengths'], flat['book_scores'],
+                           flat['books_flat'], flat['books_offsets'],
+                           flat['books_lengths'], flat['book_scores'],
                            flat['total_days'],
                            out_selected, out_books, out_book_libs)

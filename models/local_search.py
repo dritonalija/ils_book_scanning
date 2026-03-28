@@ -1,3 +1,4 @@
+import random
 import time
 
 from models.solution import Solution
@@ -6,12 +7,30 @@ from models.tweaks import Tweaks
 
 class LocalSearch:
     @staticmethod
+    def _weighted_methods(tweak_weights=None):
+        methods = Tweaks.get_tweak_methods()
+        labels = [label for label, _ in methods]
+        probs = [
+            (tweak_weights or Tweaks.DEFAULT_WEIGHTS).get(label, 0.0)
+            for label in labels
+        ]
+        if sum(probs) <= 0:
+            raise ValueError("At least one local-search operator weight must be positive")
+        return methods, probs
+
+    @staticmethod
     def _polish_profile(data):
         total_occurrences = sum(data.lib_num_books)
+        dense_small_library_instance = (
+            data.num_libs <= 250 and data.num_days <= 1000
+        )
         if (
+            not dense_small_library_instance
+            and (
             data.num_libs >= 15000
             or total_occurrences >= 700000
             or data.num_days >= 50000
+            )
         ):
             return {
                 "passes": 1,
@@ -19,11 +38,17 @@ class LocalSearch:
                 "adjacent_checks": 48,
                 "total_checks": 84,
                 "move_span": 2,
+                "boundary_signed": 5,
+                "boundary_unsigned": 8,
+                "boundary_checks": 30,
             }
         if (
+            not dense_small_library_instance
+            and (
             data.num_libs >= 3000
             or total_occurrences >= 300000
             or data.num_days >= 10000
+            )
         ):
             return {
                 "passes": 2,
@@ -31,6 +56,9 @@ class LocalSearch:
                 "adjacent_checks": 72,
                 "total_checks": 120,
                 "move_span": 3,
+                "boundary_signed": 6,
+                "boundary_unsigned": 10,
+                "boundary_checks": 48,
             }
         if (
             data.num_libs >= 500
@@ -43,6 +71,9 @@ class LocalSearch:
                 "adjacent_checks": 108,
                 "total_checks": 180,
                 "move_span": 3,
+                "boundary_signed": 8,
+                "boundary_unsigned": 12,
+                "boundary_checks": 72,
             }
         return {
             "passes": 2,
@@ -50,6 +81,9 @@ class LocalSearch:
             "adjacent_checks": 132,
             "total_checks": 220,
             "move_span": 4,
+            "boundary_signed": 10,
+            "boundary_unsigned": 14,
+            "boundary_checks": 96,
         }
 
     @staticmethod
@@ -66,11 +100,22 @@ class LocalSearch:
         best_solution = current_solution.clone()
         iterations = 0
         stagnant = 0
+        methods, probs = LocalSearch._weighted_methods(tweak_weights)
 
         while (time.time() - start_time < time_limit) and (iterations < max_iterations):
-            tweak_method = Tweaks.choose_tweak_method(tweak_weights)
-            new_solution = tweak_method(current_solution, data)
-            if new_solution.fitness_score > current_solution.fitness_score:
+            label, tweak_method = random.choices(methods, weights=probs, k=1)[0]
+            new_solution = None
+
+            if label in Tweaks.FAST_ORDER_OPERATORS:
+                order = Tweaks.build_candidate_order(label, current_solution, data)
+                if order is not None:
+                    score = data.screen_evaluate(order)
+                    if score > current_solution.fitness_score:
+                        new_solution = Solution.from_order(order, data)
+            else:
+                new_solution = tweak_method(current_solution, data)
+
+            if new_solution is not None and new_solution.fitness_score > current_solution.fitness_score:
                 current_solution = new_solution
                 stagnant = 0
                 if current_solution.fitness_score > best_solution.fitness_score:
@@ -108,10 +153,11 @@ class LocalSearch:
                     break
                 order = base_order.copy()
                 order[i], order[i + 1] = order[i + 1], order[i]
-                candidate = Solution.from_order(order, data)
                 checks += 1
-                if candidate.fitness_score > best_candidate.fitness_score:
-                    best_candidate = candidate
+                if data.screen_evaluate(order) > best_candidate.fitness_score:
+                    candidate = Solution.from_order(order, data)
+                    if candidate.fitness_score > best_candidate.fitness_score:
+                        best_candidate = candidate
 
             move_span = profile["move_span"]
             for i in range(prefix_limit):
@@ -125,10 +171,33 @@ class LocalSearch:
                     order = base_order.copy()
                     lib_id = order.pop(i)
                     order.insert(j, lib_id)
-                    candidate = Solution.from_order(order, data)
                     checks += 1
-                    if candidate.fitness_score > best_candidate.fitness_score:
-                        best_candidate = candidate
+                    if data.screen_evaluate(order) > best_candidate.fitness_score:
+                        candidate = Solution.from_order(order, data)
+                        if candidate.fitness_score > best_candidate.fitness_score:
+                            best_candidate = candidate
+
+            # Intensify around the active/unused frontier where small changes
+            # often decide which last libraries still fit in time.
+            signed_tail = min(signed_count, profile["boundary_signed"])
+            unsigned_limit = min(len(base_order) - signed_count, profile["boundary_unsigned"])
+            boundary_checks = 0
+            if signed_tail > 0 and unsigned_limit > 0 and time.time() < deadline:
+                signed_start = signed_count - signed_tail
+                unsigned_end = signed_count + unsigned_limit
+                for i in range(signed_start, signed_count):
+                    if time.time() >= deadline or boundary_checks >= profile["boundary_checks"]:
+                        break
+                    for j in range(signed_count, unsigned_end):
+                        if time.time() >= deadline or boundary_checks >= profile["boundary_checks"]:
+                            break
+                        order = base_order.copy()
+                        order[i], order[j] = order[j], order[i]
+                        boundary_checks += 1
+                        if data.screen_evaluate(order) > best_candidate.fitness_score:
+                            candidate = Solution.from_order(order, data)
+                            if candidate.fitness_score > best_candidate.fitness_score:
+                                best_candidate = candidate
 
             if best_candidate.fitness_score > current.fitness_score:
                 current = best_candidate
