@@ -51,6 +51,7 @@ class Solver:
         pool_size=None,
         init_max_time=120.0,
         init_budget_ratio=None,
+        restart_init_budget_ratio=0.30,
         restart_threshold=None,
         perturb_strength_base=None,
         perturb_strength_growth=None,
@@ -66,24 +67,45 @@ class Solver:
         ls_strategic_weight=1.0,
         operator_weights=None,
         operators=None,
+        enable_initial_local_search=False,
+        enable_direct_intensify=False,
         perturb_replace_bias=0.65,
         restart_fresh_probability=0.35,
         variant='full',
         log_csv=None,
     ):
+        """Run the complete ILS pipeline for one instance."""
         if variant not in VALID_VARIANTS:
             raise ValueError(
                 f"Unknown variant '{variant}'. Choose from: {VALID_VARIANTS}")
 
         profile = self._instance_profile(data)
-        max_iterations = profile["max_iterations"] if max_iterations is None else max_iterations
+        max_iterations = (
+            profile["max_iterations"] if max_iterations is None else max_iterations
+        )
         pool_size = profile["pool_size"] if pool_size is None else pool_size
-        restart_threshold = profile["restart_threshold"] if restart_threshold is None else restart_threshold
-        perturb_strength_base = profile["perturb_strength_base"] if perturb_strength_base is None else perturb_strength_base
-        perturb_strength_growth = profile["perturb_strength_growth"] if perturb_strength_growth is None else perturb_strength_growth
+        restart_threshold = (
+            profile["restart_threshold"] if restart_threshold is None else restart_threshold
+        )
+        perturb_strength_base = (
+            profile["perturb_strength_base"]
+            if perturb_strength_base is None else perturb_strength_base
+        )
+        perturb_strength_growth = (
+            profile["perturb_strength_growth"]
+            if perturb_strength_growth is None else perturb_strength_growth
+        )
         noisy_restarts = profile["noisy_restarts"] if noisy_restarts is None else noisy_restarts
-        local_no_improve_limit = profile["local_no_improve_limit"] if local_no_improve_limit is None else local_no_improve_limit
+        local_no_improve_limit = (
+            profile["local_no_improve_limit"]
+            if local_no_improve_limit is None else local_no_improve_limit
+        )
         initial_budget = min(max(1.0, init_max_time), 120.0)
+        if init_budget_ratio is not None:
+            initial_budget = min(
+                initial_budget,
+                max(1.0, time_limit * init_budget_ratio),
+            )
         selected_operators = None if operators is None else list(operators)
         tweak_weights = Tweaks.build_weights(
             order_scale=ls_order_weight,
@@ -110,7 +132,7 @@ class Solver:
                 f"Profile: {profile['name']} | Variant: {variant} | "
                 f"Init: {initial_budget:.0f}s | ILS: {time_limit:.0f}s")
 
-        # --- CSV convergence log ---
+        # CSV convergence log.
         csv_writer = None
         csv_file = None
         if log_csv:
@@ -122,7 +144,7 @@ class Solver:
                 'current_score', 'best_score', 'event'])
 
         try:
-            # --- Timing breakdown ---
+            # Timing breakdown.
             time_construction = 0.0
             time_local_search = 0.0
             time_perturbation = 0.0
@@ -155,40 +177,53 @@ class Solver:
                     initial_score, initial_score, 'initial_solution'])
 
             # =============================================
-            # Phase 2: Initial local search
+            # Phase 2: Optional initial local search
             # =============================================
             ils_start_time = time.time()
-            initial_ls_time = self._phase_time_limit(time_limit, ils_start_time, profile, phase="initial")
-
-            t0 = time.time()
-            home_base = LocalSearch.local_search(
-                home_base, data,
-                time_limit=initial_ls_time,
-                max_iterations=profile["initial_ls_iterations"],
-                no_improve_limit=local_no_improve_limit,
-                tweak_weights=tweak_weights,
-            )
-            time_local_search += time.time() - t0
-
-            if home_base.fitness_score > best_solution.fitness_score:
-                best_solution = home_base.clone()
-                best_label = "initial_local_search"
-
             home_pool = [home_base.clone()]
-            if self.verbose:
-                print(f"Construction: {time_construction:.2f}s | "
-                      f"Score: {initial_score:,} -> {home_base.fitness_score:,}")
+            if enable_initial_local_search:
+                initial_ls_time = self._phase_time_limit(
+                    time_limit, ils_start_time, profile, phase="initial")
 
-            if csv_writer:
-                csv_writer.writerow([
-                    time.time(), time.time() - ils_start_time, 'initial_ls', 0,
-                    home_base.fitness_score, best_solution.fitness_score,
-                    'after_initial_ls'])
+                t0 = time.time()
+                home_base = LocalSearch.local_search(
+                    home_base, data,
+                    time_limit=initial_ls_time,
+                    max_iterations=profile["initial_ls_iterations"],
+                    no_improve_limit=local_no_improve_limit,
+                    tweak_weights=tweak_weights,
+                )
+                time_local_search += time.time() - t0
+
+                if home_base.fitness_score > best_solution.fitness_score:
+                    best_solution = home_base.clone()
+                    best_label = "initial_local_search"
+
+                home_pool = [home_base.clone()]
+                if self.verbose:
+                    print(f"Construction: {time_construction:.2f}s | "
+                          f"Score: {initial_score:,} -> {home_base.fitness_score:,}")
+
+                if csv_writer:
+                    csv_writer.writerow([
+                        time.time(), time.time() - ils_start_time, 'initial_ls', 0,
+                        home_base.fitness_score, best_solution.fitness_score,
+                        'after_initial_ls'])
+            else:
+                if self.verbose:
+                    print(f"Construction: {time_construction:.2f}s | "
+                          f"Score: {initial_score:,} | entering ILS directly")
+
+                if csv_writer:
+                    csv_writer.writerow([
+                        time.time(), time.time() - ils_start_time, 'initial_ls', 0,
+                        home_base.fitness_score, best_solution.fitness_score,
+                        'skipped'])
 
             remaining_after_initial = max(0.0, time_limit - (time.time() - ils_start_time))
             direct_search_time = self._direct_phase_time_limit(
                 data, profile, remaining_after_initial)
-            if direct_search_time > 0.0:
+            if enable_direct_intensify and direct_search_time > 0.0:
                 t0 = time.time()
                 direct_solution, direct_iterations = self._direct_intensify(
                     home_base,
@@ -324,7 +359,7 @@ class Solver:
                         break
                     restart_init_budget = min(
                         profile["restart_init_max_time"],
-                        remaining_budget * 0.3)
+                        remaining_budget * restart_init_budget_ratio)
                     restart_label, restart_state = self._restart_state(
                         candidate_pool, home_pool, data, profile,
                         restart_fresh_probability,
@@ -394,7 +429,8 @@ class Solver:
                 print(f"  Time breakdown:")
                 print(f"    Construction:  {time_construction:.2f}s")
                 print(f"    Local search:  {time_local_search:.2f}s")
-                print(f"    Direct search: {time_direct_search:.2f}s")
+                if time_direct_search > 0.0:
+                    print(f"    Direct search: {time_direct_search:.2f}s")
                 print(f"    Perturbation:  {time_perturbation:.2f}s")
                 print(f"    Total ILS:     {total_time:.2f}s")
                 print(f"{'=' * 60}")
@@ -411,7 +447,7 @@ class Solver:
                 csv_file.close()
 
     # =============================================
-    # Helper methods (unchanged logic)
+    # Helper methods
     # =============================================
 
     def _phase_time_limit(self, total_limit, start_time, profile, phase):

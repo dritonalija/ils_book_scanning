@@ -187,6 +187,26 @@ class InstanceData:
             flat['total_days'],
         ))
 
+    def screen_evaluate_sequential(self, signed_order):
+        """
+        Fastest screening score for direct-style local search.
+        Mirrors the proxy used by the direct intensification phase so the
+        randomized search can try many more moves per second.
+        """
+        from models.evaluation import fast_evaluate_sequential
+        flat = self.to_flat_arrays()
+        signed_arr = self.order_array_view(signed_order)
+        return int(fast_evaluate_sequential(
+            signed_arr,
+            flat['libs_signup'],
+            flat['libs_rate'],
+            flat['books_flat'],
+            flat['books_offsets'],
+            flat['books_lengths'],
+            flat['book_scores'],
+            flat['total_days'],
+        ))
+
     def describe(self):
         print(f"Instance: {self.num_books:,} books, "
               f"{self.num_libs:,} libs, {self.num_days:,} days")

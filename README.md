@@ -13,9 +13,10 @@ The run is split into two phases:
    bound of 120 seconds inside the solver.
 2. ILS improvement, controlled by `--time-limit`.
 
-The initial solution does not consume the ILS budget. After construction, the
-solver runs one local-search pass on the best initial solution, then enters the
-main ILS loop.
+The initial solution does not consume the ILS budget. By default, the solver
+hands the best constructed solution straight to the main ILS loop. The old
+pre-ILS local-search pass is still available through
+`--enable-initial-local-search`.
 
 ## High-Level Flow
 
@@ -23,7 +24,7 @@ main ILS loop.
 1. Generate several initial library orders
 2. Score them quickly with exact JIT evaluation
 3. Rebuild only the top few exactly and keep the best one
-4. Improve it with local search
+4. Optionally polish it once with local search
 5. Repeat until time runs out:
    - perturb the current home-base solution
    - run local search
@@ -151,7 +152,6 @@ Current operators:
 - `swap_neighbor_libraries`
 - `critical_path_insert`
 - `diversity_swap`
-- `replace_worst`
 
 Their default sampling weights are:
 
@@ -167,7 +167,6 @@ Their default sampling weights are:
     "swap_neighbor_libraries": 0.8,
     "critical_path_insert": 0.7,
     "diversity_swap": 0.6,
-    "replace_worst": 0.5,
 }
 ```
 
@@ -178,7 +177,12 @@ The solver can also scale these operators through three grouped multipliers:
 - `ls_insert_weight`: affects operators that exchange signed and unsigned
   libraries or insert/remove libraries
 - `ls_strategic_weight`: affects the more targeted operators
-  `replace_worst` and `diversity_swap`
+  such as `diversity_swap`
+
+For manual experiments, the CLI also exposes per-operator overrides through
+`--w-...` flags. The final iRace configuration does not tune these
+individually; it tunes only the three grouped multipliers to keep the search
+space compact and interpretable.
 
 ## Benchmarking Tweak Operators
 
@@ -206,6 +210,28 @@ Useful outputs:
 The summary reports how often an operator improves the base solution, its
 average score delta, its best and worst delta, and how often it actually
 changes the current order.
+
+## iRace Tuning
+
+Use the full iRace configuration from `parameters.txt` and `scenario.txt`.
+
+The final tuning surface contains `14` parameters:
+
+- acceptance and restart control
+- perturbation strength and type bias
+- construction controls (`alpha_pool`, `grasp_rcl`, `grasp_max_time`)
+- restart construction budget ratio
+- local-search stagnation limit
+- the three grouped local-search operator weights
+
+The full tuning scenario uses `maxExperiments = 900`, while
+`scenario-test.txt` keeps a smaller `320`-experiment smoke-test setup.
+
+Example:
+
+```powershell
+irace --scenario .\scenario.txt
+```
 
 ## ILS Main Loop
 
@@ -396,11 +422,14 @@ Outputs are written to:
 | `--output-dir` | `output` | Batch output directory |
 | `--time-limit` | `300` | ILS improvement budget in seconds |
 | `--init-max-time` | `120` | Initial construction budget in seconds |
+| `--init-budget-ratio` | None | Optional cap for initial construction as a fraction of ILS time |
+| `--restart-init-budget-ratio` | `0.30` | Fraction of remaining ILS time allowed for fresh restart construction |
 | `--seed` | `54` | Random seed |
 | `--quiet` | off | Suppress solver progress logs |
 | `--validate` | off | Validate generated outputs |
 | `--variant` | `full` | Ablation mode |
 | `--log-csv` | None | Output directory for convergence CSVs |
+| `--summary-csv` | None | Batch summary CSV updated after each instance |
 
 ### Initial-solution parameters
 
@@ -424,6 +453,7 @@ Outputs are written to:
 | `--ls-order-weight` | `1.0` | Multiplier for reorder-style local-search operators |
 | `--ls-insert-weight` | `1.0` | Multiplier for insert/exchange local-search operators |
 | `--ls-strategic-weight` | `1.0` | Multiplier for targeted local-search operators |
+| `--operators` | all | Restrict local search to a chosen subset of operators |
 
 ### Perturbation and restart parameters
 
@@ -433,6 +463,8 @@ Outputs are written to:
 | `--perturb-strength-growth` | auto | Additional strength per stagnant round |
 | `--perturb-replace-bias` | `0.65` | Bias toward replace-subset perturbation |
 | `--restart-fresh-probability` | `0.35` | Probability that restart uses a fresh construction |
+| `--enable-initial-local-search` | off | Run the optional pre-ILS local-search pass |
+| `--enable-direct-intensify` | off | Run the optional direct intensification phase before ILS |
 
 ## Example Progress Output
 
@@ -444,14 +476,14 @@ Generating Initial Solutions...
     Approx score: 4,955,553
     Exact score: 5,148,866 (Heap Greedy top/raw alpha=1.0)
 Best Initial Score: 5,148,866 (Heap Greedy top/raw alpha=1.0)
-Construction: 7.04s | Score: 5,148,866 -> 5,150,150
+Construction: 7.04s | Score: 5,148,866 | entering ILS directly
 ```
 
 This means:
 
 - the initializer screened several candidate orders
 - only the top few were rebuilt exactly
-- local search immediately improved the chosen initial solution
+- the best exact initial solution was passed directly to ILS
 - the remaining runtime was spent in ILS
 
 ## Project Structure

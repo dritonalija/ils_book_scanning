@@ -15,7 +15,6 @@ class Tweaks:
         "swap_neighbor_libraries",
         "critical_path_insert",
         "diversity_swap",
-        "replace_worst",
     }
 
     DEFAULT_WEIGHTS = {
@@ -32,7 +31,6 @@ class Tweaks:
         "swap_neighbor_libraries": 0.8,
         "critical_path_insert": 0.7,
         "diversity_swap": 0.6,
-        "replace_worst": 0.5,
     }
     GROUPS = {
         "order": {
@@ -49,7 +47,6 @@ class Tweaks:
             "remove_library",
         },
         "strategic": {
-            "replace_worst",
             "diversity_swap",
         },
     }
@@ -71,7 +68,6 @@ class Tweaks:
             ("swap_neighbor_libraries", Tweaks.tweak_solution_swap_neighbor_libraries),
             ("critical_path_insert", Tweaks.tweak_solution_critical_path_insert),
             ("diversity_swap", Tweaks.tweak_solution_diversity_swap),
-            ("replace_worst", Tweaks.tweak_solution_replace_worst),
         ]
 
     @staticmethod
@@ -154,8 +150,6 @@ class Tweaks:
             return Tweaks._order_reverse_segment(solution)
         if label == "block_reinsert":
             return Tweaks._order_block_reinsert(solution)
-        if label == "replace_worst":
-            return Tweaks._order_replace_worst(solution, data)
         if label == "diversity_swap":
             return Tweaks._order_diversity_swap(solution, data)
         return None
@@ -297,44 +291,6 @@ class Tweaks:
         return order
 
     @staticmethod
-    def _order_replace_worst(solution, data):
-        signed = solution.signed_libraries
-        unsigned = solution.unsigned_libraries
-        if not signed or not unsigned:
-            return None
-
-        scored = []
-        for pos, lib_id in enumerate(signed):
-            books = solution.scanned_books_per_library.get(lib_id, [])
-            contribution = sum(data.scores[book_id] for book_id in books)
-            scored.append((contribution, pos, lib_id))
-
-        scored.sort()
-        _, worst_pos, _ = scored[0]
-        candidate_pool = unsigned[: min(32, len(unsigned))]
-        if not candidate_pool:
-            return None
-
-        best_candidate = None
-        best_value = None
-        for lib_id in candidate_pool:
-            value = 0
-            limit = min(data.lib_num_books[lib_id], max(10, data.lib_books_per_day[lib_id] * 5))
-            for book_id in data.lib_book_ids[lib_id][:limit]:
-                value += data.scores[book_id] / max(1, data.book_freq[book_id])
-            if best_value is None or value > best_value:
-                best_value = value
-                best_candidate = lib_id
-
-        if best_candidate is None:
-            return None
-
-        order = Tweaks._clone_order(solution)
-        replacement_idx = order.index(best_candidate)
-        order[worst_pos], order[replacement_idx] = order[replacement_idx], order[worst_pos]
-        return order
-
-    @staticmethod
     def _order_diversity_swap(solution, data):
         signed = solution.signed_libraries
         unsigned = solution.unsigned_libraries
@@ -439,13 +395,6 @@ class Tweaks:
     @staticmethod
     def tweak_solution_reverse_segment(solution, data):
         order = Tweaks._order_reverse_segment(solution)
-        if order is None:
-            return solution
-        return Tweaks._rebuilt(order, data)
-
-    @staticmethod
-    def tweak_solution_replace_worst(solution, data):
-        order = Tweaks._order_replace_worst(solution, data)
         if order is None:
             return solution
         return Tweaks._rebuilt(order, data)

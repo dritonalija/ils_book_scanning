@@ -98,6 +98,9 @@ class LocalSearch:
         start_time = time.time()
         current_solution = solution.clone()
         best_solution = current_solution.clone()
+        current_proxy_score = data.screen_evaluate_sequential(
+            current_solution.ordered_libraries()
+        )
         iterations = 0
         stagnant = 0
         methods, probs = LocalSearch._weighted_methods(tweak_weights)
@@ -109,14 +112,17 @@ class LocalSearch:
             if label in Tweaks.FAST_ORDER_OPERATORS:
                 order = Tweaks.build_candidate_order(label, current_solution, data)
                 if order is not None:
-                    score = data.screen_evaluate(order)
-                    if score > current_solution.fitness_score:
+                    score = data.screen_evaluate_sequential(order)
+                    if score > current_proxy_score:
                         new_solution = Solution.from_order(order, data)
             else:
                 new_solution = tweak_method(current_solution, data)
 
-            if new_solution is not None and new_solution.fitness_score > current_solution.fitness_score:
+            if new_solution is not None:
                 current_solution = new_solution
+                current_proxy_score = data.screen_evaluate_sequential(
+                    current_solution.ordered_libraries()
+                )
                 stagnant = 0
                 if current_solution.fitness_score > best_solution.fitness_score:
                     best_solution = current_solution.clone()

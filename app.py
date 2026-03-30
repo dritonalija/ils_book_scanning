@@ -1,3 +1,5 @@
+"""Command-line interface for the Book Scanning ILS solver."""
+
 import argparse
 import csv
 import os
@@ -6,6 +8,10 @@ import random
 from models import Parser
 from models import Solver
 from models.tweaks import Tweaks
+from models.solver import VALID_VARIANTS
+
+
+DEFAULT_ALPHA_VALUES = [0.5, 1.0, 1.5, 2.0]
 
 
 def compute_improvement(initial, final):
@@ -61,6 +67,8 @@ def run_instance(args, input_path, output_path):
         max_iterations=args.max_iterations,
         pool_size=args.pool_size,
         init_max_time=args.init_max_time,
+        init_budget_ratio=args.init_budget_ratio,
+        restart_init_budget_ratio=args.restart_init_budget_ratio,
         restart_threshold=args.restart_threshold,
         perturb_strength_base=args.perturb_strength_base,
         perturb_strength_growth=args.perturb_strength_growth,
@@ -76,6 +84,8 @@ def run_instance(args, input_path, output_path):
         ls_strategic_weight=args.ls_strategic_weight,
         operator_weights=operator_weights or None,
         operators=args.operators,
+        enable_initial_local_search=args.enable_initial_local_search,
+        enable_direct_intensify=args.enable_direct_intensify,
         perturb_replace_bias=args.perturb_replace_bias,
         restart_fresh_probability=args.restart_fresh_probability,
         variant=args.variant,
@@ -86,7 +96,7 @@ def run_instance(args, input_path, output_path):
     return result
 
 
-def main():
+def build_argument_parser():
     parser = argparse.ArgumentParser(
         description="Iterated Local Search for Book Scanning")
 
@@ -98,6 +108,10 @@ def main():
                         help="ILS search time budget in seconds")
     parser.add_argument("--init-max-time", type=float, default=120.0,
                         help="Maximum initial construction time in seconds")
+    parser.add_argument("--init-budget-ratio", type=float, default=None,
+                        help="Optional cap for initial construction as a fraction of ILS time")
+    parser.add_argument("--restart-init-budget-ratio", type=float, default=0.30,
+                        help="Fraction of remaining ILS time allowed for fresh restart construction")
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--pool-size", type=int, default=None)
     parser.add_argument("--restart-threshold", type=int, default=None)
@@ -113,6 +127,16 @@ def main():
     parser.add_argument("--ls-insert-weight", type=float, default=1.0)
     parser.add_argument("--ls-strategic-weight", type=float, default=1.0)
     parser.add_argument(
+        "--enable-initial-local-search",
+        action="store_true",
+        help="Run the pre-ILS local-search pass on the initial solution",
+    )
+    parser.add_argument(
+        "--enable-direct-intensify",
+        action="store_true",
+        help="Enable the optional pre-ILS direct intensification phase",
+    )
+    parser.add_argument(
         "--operators",
         nargs="+",
         choices=Tweaks.operator_labels(),
@@ -126,11 +150,9 @@ def main():
                         help="Validate outputs after generation")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--alphas", type=float, nargs="+",
-                        default=[0.5, 1.0, 1.5, 2.0])
+                        default=DEFAULT_ALPHA_VALUES)
     parser.add_argument("--variant", type=str, default="full",
-                        choices=list(Solver.__module__ and [
-                            'full', 'no_perturb', 'no_restart',
-                            'no_accept', 'random_walk', 'ls_only']),
+                        choices=sorted(VALID_VARIANTS),
                         help="Algorithm variant for ablation study")
     parser.add_argument("--log-csv", type=str, default=None,
                         help="Directory for convergence CSV logs")
@@ -144,6 +166,12 @@ def main():
             default=None,
             help=f"Override weight for operator {label}",
         )
+
+    return parser
+
+
+def main():
+    parser = build_argument_parser()
     args = parser.parse_args()
 
     random.seed(args.seed)
