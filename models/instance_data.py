@@ -68,8 +68,8 @@ class InstanceData:
 
     def to_flat_arrays(self):
         """
-        Convert OOP data to flat NumPy arrays for Numba-accelerated
-        evaluation. Cached after first call.
+        Convert the instance representation to flat NumPy arrays for
+        Numba-accelerated evaluation. The result is cached after the first call.
         """
         if self._flat is not None:
             return self._flat
@@ -118,8 +118,8 @@ class InstanceData:
 
     def rebuild_workspace(self):
         """
-        Reusable NumPy buffers for Solution.from_order rebuilds.
-        Avoids reallocating several O(num_books) arrays on every move.
+        Allocate reusable NumPy buffers for `Solution.from_order` rebuilds.
+        This avoids repeated allocation of O(num_books) arrays during search.
         """
         if self._rebuild_workspace is None:
             max_order = max(1, self.num_libs)
@@ -146,7 +146,7 @@ class InstanceData:
     def fast_evaluate(self, signed_order):
         """
         Evaluate a signed library ordering using Numba-accelerated code.
-        Falls back to pure Python if Numba is not available.
+        A pure Python implementation is used when Numba is unavailable.
         """
         from models.evaluation import fast_evaluate, fast_evaluate_global
         flat = self.to_flat_arrays()
@@ -189,9 +189,9 @@ class InstanceData:
 
     def screen_evaluate_sequential(self, signed_order):
         """
-        Fastest screening score for direct-style local search.
-        Mirrors the proxy used by the direct intensification phase so the
-        randomized search can try many more moves per second.
+        Lowest-cost screening score used during direct intensification.
+        It mirrors the proxy used in the intensification phase so that the
+        search can evaluate substantially more moves per second.
         """
         from models.evaluation import fast_evaluate_sequential
         flat = self.to_flat_arrays()

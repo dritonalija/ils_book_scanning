@@ -1,13 +1,13 @@
 """
-Iterated Local Search (ILS) with Random Restarts for Book Scanning.
+Iterated Local Search (ILS) with random restarts for Book Scanning.
 
-Supports multiple algorithm variants for ablation studies:
-  - full         : Complete ILS (default)
-  - no_perturb   : ILS without perturbation (local search only)
-  - no_restart   : ILS without restart mechanism
-  - no_accept    : ILS without acceptance of worse solutions (pure HC)
-  - random_walk  : Accept all perturbations (no quality filter)
-  - ls_only      : Single local search run (no ILS loop)
+Supported variants for ablation studies:
+  - full         : complete ILS configuration
+  - no_perturb   : ILS without perturbation
+  - no_restart   : ILS without restarts
+  - no_accept    : ILS without acceptance of inferior candidates
+  - random_walk  : accept every perturbed candidate
+  - ls_only      : single local-search run without the ILS loop
 """
 
 import csv
@@ -132,7 +132,7 @@ class Solver:
                 f"Profile: {profile['name']} | Variant: {variant} | "
                 f"Init: {initial_budget:.0f}s | ILS: {time_limit:.0f}s")
 
-        # CSV convergence log.
+        # Convergence log configuration.
         csv_writer = None
         csv_file = None
         if log_csv:
@@ -144,7 +144,7 @@ class Solver:
                 'current_score', 'best_score', 'event'])
 
         try:
-            # Timing breakdown.
+            # Runtime accounting.
             time_construction = 0.0
             time_local_search = 0.0
             time_perturbation = 0.0
@@ -212,7 +212,7 @@ class Solver:
             else:
                 if self.verbose:
                     print(f"Construction: {time_construction:.2f}s | "
-                          f"Score: {initial_score:,} | entering ILS directly")
+                          f"Score: {initial_score:,} | entering ILS")
 
                 if csv_writer:
                     csv_writer.writerow([
@@ -251,7 +251,7 @@ class Solver:
                         home_base.fitness_score, best_solution.fitness_score,
                         f'direct_{direct_iterations}'])
 
-            # Early exit for ls_only variant
+            # Return immediately after the initial local-search phase.
             if variant == 'ls_only':
                 best_solution.initial_score = initial_score
                 return best_solution
@@ -798,11 +798,11 @@ class Solver:
             data.num_libs <= 250 and data.num_days <= 1000
         )
 
-        # Profile selection is based on quantities that exist in the official
-        # problem statement: number of libraries, number of days, and total
-        # book occurrences across libraries (bounded by 10^6). Dense synthetic
-        # instances with few libraries should not be pushed into the most
-        # conservative profiles purely because their occurrence count is high.
+        # Profile selection is based on quantities available in the input:
+        # number of libraries, number of days, and total book occurrences
+        # across libraries. Dense synthetic instances with relatively few
+        # libraries should not be assigned the most conservative profile
+        # solely because their occurrence count is high.
         if (
             not dense_small_library_instance
             and (

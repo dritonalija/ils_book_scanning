@@ -170,7 +170,7 @@ class Solution:
         return self
 
     def _rebuild_python(self, order, data):
-        """Pure Python fallback rebuild."""
+        """Pure Python rebuild used when compiled evaluation is unavailable."""
         selected, capacities, positions = self._feasible_libraries(order, data)
         scanned_per_lib, scanned_books, fitness_score = self._assign_books_global(
             selected, capacities, positions, data)

@@ -1,4 +1,5 @@
-input/b_read_on.txt
-input/c_incunabula.txt
-input/B100_L9_D18.txt
-input/B1.5k_L20_D40.txt
+input/google_hashcode/b_read_on.txt
+input/google_hashcode/c_incunabula.txt
+input/google_hashcode/d_tough_choices.txt
+input/google_hashcode/e_so_many_books.txt
+input/google_hashcode/f_libraries_of_the_world.txt

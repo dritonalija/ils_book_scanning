@@ -18,9 +18,8 @@ class Tweaks:
     }
 
     DEFAULT_WEIGHTS = {
-        # Rebalanced using operator-only hill-climbing benchmarks on weak
-        # starting solutions, combining a 5-instance suite and the real
-        # e_so_many_books instance.
+        # Weights calibrated from operator-isolation experiments on a
+        # five-instance suite together with the `e_so_many_books` instance.
         "remove_library": 2.8,
         "move_signed": 2.4,
         "swap_signed": 2.2,

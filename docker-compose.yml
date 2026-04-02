@@ -23,4 +23,4 @@ services:
     volumes:
       - ./output:/app/output
     command: >
-      python3 app.py --input-dir input --output-dir output --time-limit 60
+      python3 app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --time-limit 60

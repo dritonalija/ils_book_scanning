@@ -183,8 +183,8 @@ class LocalSearch:
                         if candidate.fitness_score > best_candidate.fitness_score:
                             best_candidate = candidate
 
-            # Intensify around the active/unused frontier where small changes
-            # often decide which last libraries still fit in time.
+            # Intensify the boundary between signed and unsigned libraries,
+            # where small changes often determine the final feasible prefix.
             signed_tail = min(signed_count, profile["boundary_signed"])
             unsigned_limit = min(len(base_order) - signed_count, profile["boundary_unsigned"])
             boundary_checks = 0
