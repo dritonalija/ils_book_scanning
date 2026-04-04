@@ -272,7 +272,7 @@ The final tuning surface contains `13` parameters:
 - local-search stagnation limit
 - the three grouped local-search operator weights
 
-The full tuning scenario uses `maxExperiments = 900`, while
+The full tuning scenario uses `maxExperiments = 1500`, while
 `scenario-test.txt` provides a reduced `320`-experiment configuration.
 
 Both iRace scenarios use `trainInstancesFile` and `testInstancesFile`.
@@ -294,16 +294,18 @@ then added to the iRace test set so elite selection also accounts for them.
 
 The iRace scenarios keep progressive instance sampling enabled
 (`sampleInstances = 1`) and evaluate the top `5` elites on the hold-out split
-(`testNbElites = 5`).
+(`testNbElites = 5`). They also run up to `4` target-runner jobs in parallel
+(`targetRunnerParallel = 4`).
 
 ### What each iRace file does
 
 - `parameters.txt`: declares the parameter search space for iRace
-- `scenario.txt`: main iRace run with the full `900`-experiment budget
+- `scenario.txt`: main iRace run with the full `1500`-experiment budget
 - `scenario-test.txt`: smaller iRace run with a `320`-experiment budget
 - `instances.txt`: training instances used during tuning
 - `instances-test.txt`: hold-out instances used by iRace for elite testing
 - `target-runner.sh`: shell entry point called by iRace
+- `targetRunnerParallel = 4`: parallel target-runner jobs used by each scenario
 - `irace_runner.py`: Python adapter that receives candidate parameters from
   iRace, runs the solver on one instance, and prints a single cost value back
   to iRace
