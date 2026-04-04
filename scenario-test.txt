@@ -1,5 +1,8 @@
 parameterFile = "parameters.txt"
-trainInstancesFile = "instances-test.txt"
+trainInstancesFile = "instances.txt"
+testInstancesFile = "instances-test.txt"
+sampleInstances = 1
+testNbElites = 5
 targetRunner = "./target-runner.sh"
 maxExperiments = 320
 logFile = "irace_output/irace-test.Rdata"

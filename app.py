@@ -4,6 +4,7 @@ import argparse
 import csv
 import os
 import random
+import time
 
 from models import Parser
 from models import Solver
@@ -23,6 +24,8 @@ def write_summary_header(csv_writer):
         "instance",
         "initial_score",
         "final_score",
+        "elapsed_s",
+        "running_elapsed_s",
         "improvement_pct",
         "running_total_initial",
         "running_total_final",
@@ -30,12 +33,14 @@ def write_summary_header(csv_writer):
     ])
 
 
-def append_summary_row(csv_writer, file_name, initial, final,
-                       total_initial, total_final):
+def append_summary_row(csv_writer, file_name, elapsed_s, running_elapsed_s,
+                       initial, final, total_initial, total_final):
     csv_writer.writerow([
         file_name,
         initial,
         final,
+        f"{elapsed_s:.6f}",
+        f"{running_elapsed_s:.6f}",
         f"{compute_improvement(initial, final):.6f}",
         total_initial,
         total_final,
@@ -187,6 +192,7 @@ def main():
         results = []
         total_initial = 0
         total_final = 0
+        running_elapsed = 0.0
         summary_file = None
         summary_writer = None
         if args.summary_csv:
@@ -202,14 +208,19 @@ def main():
                     continue
                 input_path = os.path.join(args.input_dir, file)
                 output_path = os.path.join(args.output_dir, file)
+                instance_start = time.time()
                 result = run_instance(args, input_path, output_path)
+                elapsed_s = time.time() - instance_start
                 results.append((file, result.initial_score, result.fitness_score))
                 total_initial += result.initial_score
                 total_final += result.fitness_score
+                running_elapsed += elapsed_s
                 if summary_writer:
                     append_summary_row(
                         summary_writer,
                         file,
+                        elapsed_s,
+                        running_elapsed,
                         result.initial_score,
                         result.fitness_score,
                         total_initial,

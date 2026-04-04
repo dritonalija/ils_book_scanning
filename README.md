@@ -5,27 +5,66 @@ problem. The current implementation combines a multi-start construction phase,
 exact JIT-accelerated evaluation, randomized local search, adaptive
 perturbation, and random restarts.
 
+## Table of Contents
+
+- [Iterated Local Search for Book Scanning](#iterated-local-search-for-book-scanning)
+  - [Table of Contents](#table-of-contents)
+  - [Datasets](#datasets)
+  - [What The Solver Does](#what-the-solver-does)
+  - [High-Level Flow](#high-level-flow)
+  - [Initial Solution Phase](#initial-solution-phase)
+    - [Constructors currently tried](#constructors-currently-tried)
+    - [How candidate screening works](#how-candidate-screening-works)
+    - [Meaning of the construction methods](#meaning-of-the-construction-methods)
+    - [Potential modes](#potential-modes)
+    - [Construction parameters](#construction-parameters)
+  - [Exact Evaluation And Numba](#exact-evaluation-and-numba)
+  - [Local Search](#local-search)
+    - [Tweak operators](#tweak-operators)
+  - [Batch Runs And Summaries](#batch-runs-and-summaries)
+  - [iRace Tuning](#irace-tuning)
+    - [What each iRace file does](#what-each-irace-file-does)
+    - [Run iRace Locally](#run-irace-locally)
+  - [ILS Main Loop](#ils-main-loop)
+    - [Acceptance rule](#acceptance-rule)
+  - [Perturbation](#perturbation)
+    - [Perturbation types](#perturbation-types)
+  - [Restart Strategy](#restart-strategy)
+  - [Instance Profiles](#instance-profiles)
+  - [CLI Usage](#cli-usage)
+    - [Single instance](#single-instance)
+    - [Batch mode](#batch-mode)
+    - [Ablation variants](#ablation-variants)
+    - [Convergence logging](#convergence-logging)
+  - [Docker Usage](#docker-usage)
+  - [CLI Parameters](#cli-parameters)
+    - [Core run control](#core-run-control)
+    - [Initial-solution parameters](#initial-solution-parameters)
+    - [ILS and local-search parameters](#ils-and-local-search-parameters)
+    - [Perturbation and restart parameters](#perturbation-and-restart-parameters)
+  - [Project Structure](#project-structure)
+  - [Dependencies](#dependencies)
+  - [References](#references)
+
 ## Datasets
 
-The `input/` directory currently contains four primary dataset collections and
-one reserved hold-out folder:
+The `input/` directory currently contains four primary dataset collections:
 
 | Folder | Instances | Source | Purpose |
 |---|---:|---|---|
-| `google_hashcode/` | 5 | Google Hash Code 2020 Book Scanning problem instances | Original reference instances from the competition |
+| `google_hashcode/` | 5 | Google Hash Code 2020 Book Scanning problem instances | Official benchmark instances from the original dataset, also included in iRace elite testing |
 | `real_world/` | 51 | [Book Scanning Problem Input Generator](https://bookscanning-ig.netlify.app/) | Generated instances intended to reflect real-world scanning scenarios |
-| `synthetic/` | 184 | [uran-lajci/Book.Scanning.Dataset](https://github.com/uran-lajci/Book.Scanning.Dataset) | Larger synthetic training and evaluation pool |
+| `synthetic/` | 139 | [uran-lajci/Book.Scanning.Dataset](https://github.com/uran-lajci/Book.Scanning.Dataset) | Larger synthetic training and evaluation pool |
 | `seed_based/` | 135 | [dritonalija/book_scanning_dataset](https://github.com/dritonalija/book_scanning_dataset) | Seed-controlled generated instances for reproducible experiments |
-| `test/` | 0 | Selected from `synthetic/` | Reserved for the final hold-out test subset |
 
 Two practical notes about the current layout:
 
 - batch runs should target a specific dataset folder such as `input/google_hashcode`
   or `input/seed_based`
-- `input/test/` is intentionally separate and should be populated by copying
-  the synthetic instances you want to keep as a final unseen test set
-- `input/real_world/` is documented for experiments and reporting, but it is
-  not part of the current iRace instance lists
+- iRace tuning uses only `input/synthetic/` and `input/seed_based/`, split into
+  deterministic train/test lists via `instances.txt` and `instances-test.txt`
+- `google_hashcode/` is appended to `instances-test.txt` so iRace elite testing
+  also considers the classic benchmark cases
 
 ## What The Solver Does
 
@@ -34,11 +73,6 @@ The run is split into two phases:
 1. Initial solution generation, capped by `--init-max-time` with a hard upper
    bound of 120 seconds inside the solver.
 2. ILS improvement, controlled by `--time-limit`.
-
-The initial solution does not consume the ILS budget. By default, the solver
-hands the best constructed solution straight to the main ILS loop. The old
-pre-ILS local-search pass is still available through
-`--enable-initial-local-search`.
 
 ## High-Level Flow
 
@@ -116,25 +150,22 @@ requiring a full exact rebuild for every candidate.
 - `alpha`: controls how strongly signup time is penalized. Larger values favor
   faster-signup libraries more aggressively.
 - `grasp_rcl`: restricted candidate list ratio for GRASP.
-- `grasp_max_time`: dedicated GRASP budget. Default is `5s`, so GRASP acts as
-  an exploratory initializer rather than dominating construction time.
+- `grasp_max_time`: dedicated GRASP budget. The solver still exposes it as a
+  CLI option with default `5s`, but the current iRace setup keeps it fixed
+  instead of tuning it.
 
 ## Exact Evaluation And Numba
 
-Evaluation is implemented in `models/evaluation.py`
-and used through `models/solution.py`.
+Evaluation is implemented in `models/evaluation.py`.
 
-The JIT-accelerated evaluation is exact. It follows the same global
-book-assignment logic as the Python reconstruction procedure, rather than using
-an approximate per-library scoring rule.
+In simple terms:
 
-That means:
+- `Numba` makes the scoring code much faster
+- the final solution rebuild still uses the same scoring logic
+- some search steps use faster proxy scores so they can test more moves
+- if `numba` is not available, the solver still works, just more slowly
 
-- fast screening is still exact with respect to the objective
-- local-search neighbors are evaluated with the same semantics
-- `Numba` speeds up evaluation but does not change solution logic
-
-If `numba` is unavailable, the solver falls back to pure Python rebuilds.
+So `Numba` is a speed improvement, not a change to the objective.
 
 ## Local Search
 
@@ -225,36 +256,100 @@ Useful outputs:
 - a batch summary CSV with the columns:
 
 ```text
-instance, initial_score, final_score, improvement_pct, running_total_initial, running_total_final, running_total_improvement_pct
+instance, initial_score, final_score, elapsed_s, running_elapsed_s, improvement_pct, running_total_initial, running_total_final, running_total_improvement_pct
 ```
-
-This is the summary format written by `app.py`, and it matches files such as
-`output_instances_135_hybrid/batch_summary.csv`.
 
 ## iRace Tuning
 
 Use the full iRace configuration from `parameters.txt` and `scenario.txt`.
 
-The final tuning surface contains `14` parameters:
+The final tuning surface contains `13` parameters:
 
 - acceptance and restart control
 - perturbation strength and type bias
-- construction controls (`alpha_pool`, `grasp_rcl`, `grasp_max_time`)
+- construction controls (`alpha_pool`, `grasp_rcl`)
 - restart construction budget ratio
 - local-search stagnation limit
 - the three grouped local-search operator weights
 
 The full tuning scenario uses `maxExperiments = 900`, while
-`scenario-test.txt` provides a reduced `320`-experiment test configuration.
+`scenario-test.txt` provides a reduced `320`-experiment configuration.
 
-The instance lists in `instances.txt` and `instances-test.txt` point to the
-current dataset subfolders under `input/`.
+Both iRace scenarios use `trainInstancesFile` and `testInstancesFile`.
+`instances.txt` contains the deterministic training split, and
+`instances-test.txt` contains the deterministic hold-out split plus the
 
-Example:
+The current split is:
 
-```powershell
-irace --scenario .\scenario.txt
+- training: `220` instances total
+- test: `59` instances total
+- synthetic: `112` train, `27` test
+- seed_based: `108` train, `27` test
+- google_hashcode: `0` train, `5` test
+
+The split is deterministic and reproducible: every fifth instance in the
+ordered list of each dataset is assigned to the iRace test set, with the
+remaining instances used for tuning. The five Google Hash Code instances are
+then added to the iRace test set so elite selection also accounts for them.
+
+The iRace scenarios keep progressive instance sampling enabled
+(`sampleInstances = 1`) and evaluate the top `5` elites on the hold-out split
+(`testNbElites = 5`).
+
+### What each iRace file does
+
+- `parameters.txt`: declares the parameter search space for iRace
+- `scenario.txt`: main iRace run with the full `900`-experiment budget
+- `scenario-test.txt`: smaller iRace run with a `320`-experiment budget
+- `instances.txt`: training instances used during tuning
+- `instances-test.txt`: hold-out instances used by iRace for elite testing
+- `target-runner.sh`: shell entry point called by iRace
+- `irace_runner.py`: Python adapter that receives candidate parameters from
+  iRace, runs the solver on one instance, and prints a single cost value back
+  to iRace
+
+`irace_runner.py` exists because iRace expects a target runner that can:
+
+- read one candidate configuration and one instance from the command line
+- execute the solver with those values
+- suppress normal solver logs
+- print one numeric result in the format iRace expects
+
+In this repository, the solver maximises score, while iRace minimises cost, so
+`irace_runner.py` returns the negative score.
+
+### Run iRace Locally
+
+Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
 ```
+
+Install the R package:
+
+```bash
+Rscript -e "install.packages('irace', repos='https://cloud.r-project.org/')"
+```
+
+Make sure the target runner is executable:
+
+```bash
+chmod +x target-runner.sh
+```
+
+Run the reduced scenario:
+
+```bash
+Rscript -e "library(irace); irace(scenario=readScenario('scenario-test.txt'))"
+```
+
+Run the full scenario:
+
+```bash
+Rscript -e "library(irace); irace(scenario=readScenario('scenario.txt'))"
+```
+
 
 ## ILS Main Loop
 
@@ -407,7 +502,7 @@ Build the image:
 docker compose build
 ```
 
-Run the small iRace test scenario:
+Run the small iRace scenario:
 
 ```bash
 docker compose run --rm irace-test
@@ -424,10 +519,6 @@ Run the solver in batch mode inside Docker:
 ```bash
 docker compose run --rm solver
 ```
-
-The default Docker solver command runs the `google_hashcode/` dataset. To solve a
-different collection, change the `solver` service command to another
-subdirectory such as `input/synthetic` or `input/seed_based`.
 
 The Docker services are defined in:
 
@@ -557,4 +648,3 @@ Dataset references:
 - `real_world/`: https://bookscanning-ig.netlify.app/
 - `synthetic/`: https://github.com/uran-lajci/Book.Scanning.Dataset
 - `seed_based/`: https://github.com/dritonalija/book_scanning_dataset
-- `test/`: selected from `synthetic/` for hold-out evaluation
