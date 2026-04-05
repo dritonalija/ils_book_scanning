@@ -80,9 +80,6 @@ class Solver:
                 f"Unknown variant '{variant}'. Choose from: {VALID_VARIANTS}")
 
         profile = self._instance_profile(data)
-        max_iterations = (
-            profile["max_iterations"] if max_iterations is None else max_iterations
-        )
         pool_size = profile["pool_size"] if pool_size is None else pool_size
         restart_threshold = (
             profile["restart_threshold"] if restart_threshold is None else restart_threshold
@@ -263,7 +260,7 @@ class Solver:
             restart_count = 0
             stagnant_rounds = 0
 
-            while time.time() - ils_start_time < time_limit and outer_round < max_iterations:
+            while time.time() - ils_start_time < time_limit:
                 outer_round += 1
 
                 # --- Perturbation ---

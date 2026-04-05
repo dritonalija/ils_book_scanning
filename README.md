@@ -463,6 +463,13 @@ single fixed parameter set.
 python app.py input/google_hashcode/e_so_many_books.txt output/google_hashcode/e_so_many_books.txt --time-limit 120
 ```
 
+By default, `app.py` now loads the `irace` parameter set. To switch back to the
+legacy CLI behavior, use:
+
+```bash
+python app.py input/google_hashcode/e_so_many_books.txt output/google_hashcode/e_so_many_books.txt --param-set default
+```
+
 ### Batch mode
 
 Batch mode should target one dataset directory at a time.
@@ -541,12 +548,13 @@ Outputs are written to:
 |---|---:|---|
 | `input` | None | Single input instance path |
 | `output` | None | Single output path |
+| `--param-set` | `irace` | Named parameter set loaded before any explicit CLI overrides |
 | `--input-dir` | `input` | Batch input directory. In this repository, pass a dataset subfolder such as `input/google_hashcode` |
 | `--output-dir` | `output` | Batch output directory |
 | `--time-limit` | `300` | ILS improvement budget in seconds |
 | `--init-max-time` | `120` | Initial construction budget in seconds |
 | `--init-budget-ratio` | None | Optional cap for initial construction as a fraction of ILS time |
-| `--restart-init-budget-ratio` | `0.30` | Fraction of remaining ILS time allocated to restart initialization |
+| `--restart-init-budget-ratio` | `0.3648` via `irace` | Fraction of remaining ILS time allocated to restart initialization |
 | `--seed` | `54` | Random seed |
 | `--quiet` | off | Suppress solver progress logs |
 | `--validate` | off | Validate generated outputs |
@@ -558,33 +566,48 @@ Outputs are written to:
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--alphas` | `0.5 1.0 1.5 2.0` | Alpha array used by construction heuristics |
-| `--grasp-rcl` | `0.05` | GRASP restricted candidate list ratio |
+| `--alphas` | `0.4 0.5 0.75 1.0 1.5 2.0` via `irace` | Alpha array used by construction heuristics |
+| `--grasp-rcl` | `0.2318` via `irace` | GRASP restricted candidate list ratio |
 | `--grasp-max-time` | `5.0` | Maximum GRASP construction time |
 | `--noisy-restarts` | auto | Number of noisy construction variants from the profile |
+
+Named parameter sets:
+
+- `default`: the baseline configuration that reproduces the earlier manually chosen CLI defaults
+- `irace`: the tuned configuration obtained from the latest iRace postselection run
+
+Any individual CLI flag such as `--accept-worse-prob` or `--alphas` still
+overrides the selected parameter set.
+
+In the current implementation, the `irace` parameter set is the active default
+for solver runs, while `default` remains available as a baseline configuration
+for comparisons and ablation-style evaluation.
 
 ### ILS and local-search parameters
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--max-iterations` | auto | Maximum outer ILS rounds |
 | `--pool-size` | auto | Elite home-base pool size |
-| `--restart-threshold` | auto | Stagnant rounds before restart |
-| `--local-no-improve-limit` | auto | Stop local search after this many non-improving steps |
-| `--accept-worse-prob` | `0.04` | Base probability for accepting worse candidates |
-| `--ls-order-weight` | `1.0` | Multiplier for reorder-style local-search operators |
-| `--ls-insert-weight` | `1.0` | Multiplier for insert/exchange local-search operators |
-| `--ls-strategic-weight` | `1.0` | Multiplier for targeted local-search operators |
+| `--restart-threshold` | `7` via `irace` | Stagnant rounds before restart |
+| `--local-no-improve-limit` | `449` via `irace` | Stop local search after this many non-improving steps |
+| `--accept-worse-prob` | `0.1466` via `irace` | Base probability for accepting worse candidates |
+| `--ls-order-weight` | `0.7117` via `irace` | Multiplier for reorder-style local-search operators |
+| `--ls-insert-weight` | `2.1158` via `irace` | Multiplier for insert/exchange local-search operators |
+| `--ls-strategic-weight` | `0.7780` via `irace` | Multiplier for targeted local-search operators |
 | `--operators` | all | Restrict local search to a chosen subset of operators |
+
+The outer ILS loop is time-driven: once started, it continues exploring new
+perturbed and restarted solutions until the allotted `--time-limit` budget is
+exhausted.
 
 ### Perturbation and restart parameters
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--perturb-strength-base` | auto | Base perturbation strength |
-| `--perturb-strength-growth` | auto | Additional strength per stagnant round |
-| `--perturb-replace-bias` | `0.65` | Bias toward replace-subset perturbation |
-| `--restart-fresh-probability` | `0.35` | Probability that restart uses a fresh construction |
+| `--perturb-strength-base` | `4` via `irace` | Base perturbation strength |
+| `--perturb-strength-growth` | `3` via `irace` | Additional strength per stagnant round |
+| `--perturb-replace-bias` | `0.3751` via `irace` | Bias toward replace-subset perturbation |
+| `--restart-fresh-probability` | `0.2679` via `irace` | Probability that restart uses a fresh construction |
 | `--enable-initial-local-search` | off | Run the optional pre-ILS local-search pass |
 | `--enable-direct-intensify` | off | Run the optional direct intensification phase before ILS |
 

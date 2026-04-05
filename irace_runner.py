@@ -13,6 +13,7 @@ from contextlib import redirect_stdout
 import os
 import sys
 
+from parameter_sets import ALPHA_POOLS
 
 DEFAULT_IRACE_TIME_LIMIT = 60.0
 DEFAULT_INIT_BUDGET_RATIO = 0.30
@@ -35,13 +36,6 @@ INT_PARAMS = {
     'perturb_strength_base',
     'perturb_strength_growth',
     'local_no_improve_limit',
-}
-ALPHA_POOL_MAP = {
-    'default': [0.5, 1.0, 1.5, 2.0],
-    'wide': [0.5, 1.0, 1.5, 2.0, 3.0],
-    'dense': [0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
-    'signup': [0.75, 1.0, 1.5, 2.0, 3.0],
-    'explore': [0.4, 0.5, 0.75, 1.0, 1.5, 2.0],
 }
 
 
@@ -90,7 +84,7 @@ def build_solver_kwargs(instance_path, time_limit, params):
         elif key in INT_PARAMS:
             kwargs[key] = int(value)
         elif key == 'alpha_pool':
-            kwargs['alpha_values'] = ALPHA_POOL_MAP[value]
+            kwargs['alpha_values'] = ALPHA_POOLS[value]
 
     return kwargs
 

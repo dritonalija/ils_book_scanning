@@ -4,15 +4,19 @@ import argparse
 import csv
 import os
 import random
+import sys
 import time
 
 from models import Parser
 from models import Solver
 from models.tweaks import Tweaks
 from models.solver import VALID_VARIANTS
-
-
-DEFAULT_ALPHA_VALUES = [0.5, 1.0, 1.5, 2.0]
+from parameter_sets import (
+    ALPHA_POOLS,
+    DEFAULT_PARAMETER_SET_NAME,
+    PARAMETER_SETS,
+    get_parameter_set,
+)
 
 
 def compute_improvement(initial, final):
@@ -46,6 +50,36 @@ def append_summary_row(csv_writer, file_name, elapsed_s, running_elapsed_s,
         total_final,
         f"{compute_improvement(total_initial, total_final):.6f}",
     ])
+
+
+def collect_explicit_dests(parser, argv):
+    explicit_dests = set()
+    option_to_dest = {}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_to_dest[option] = action.dest
+
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest is not None:
+            explicit_dests.add(dest)
+
+    return explicit_dests
+
+
+def apply_parameter_set(args, explicit_dests):
+    parameter_set = get_parameter_set(args.param_set)
+    parameter_set.pop("description", None)
+
+    for dest, value in parameter_set.items():
+        if dest in explicit_dests:
+            continue
+        setattr(args, dest, value)
+
+    return args
 
 
 def run_instance(args, input_path, output_path):
@@ -107,6 +141,12 @@ def build_argument_parser():
 
     parser.add_argument("input", nargs="?", help="Single input instance path")
     parser.add_argument("output", nargs="?", help="Single output solution path")
+    parser.add_argument(
+        "--param-set",
+        default=DEFAULT_PARAMETER_SET_NAME,
+        choices=sorted(PARAMETER_SETS),
+        help="Named parameter set to load before applying individual CLI overrides",
+    )
     parser.add_argument("--input-dir", default="input")
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--time-limit", type=float, default=300.0,
@@ -117,7 +157,12 @@ def build_argument_parser():
                         help="Optional cap for initial construction as a fraction of ILS time")
     parser.add_argument("--restart-init-budget-ratio", type=float, default=0.30,
                         help="Fraction of remaining ILS time allowed for fresh restart construction")
-    parser.add_argument("--max-iterations", type=int, default=None)
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Deprecated compatibility flag; the outer ILS loop now runs until the time limit",
+    )
     parser.add_argument("--pool-size", type=int, default=None)
     parser.add_argument("--restart-threshold", type=int, default=None)
     parser.add_argument("--perturb-strength-base", type=int, default=None)
@@ -155,7 +200,7 @@ def build_argument_parser():
                         help="Validate outputs after generation")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--alphas", type=float, nargs="+",
-                        default=DEFAULT_ALPHA_VALUES)
+                        default=ALPHA_POOLS["default"])
     parser.add_argument("--variant", type=str, default="full",
                         choices=sorted(VALID_VARIANTS),
                         help="Algorithm variant for ablation study")
@@ -175,9 +220,17 @@ def build_argument_parser():
     return parser
 
 
+def parse_arguments(parser, argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    explicit_dests = collect_explicit_dests(parser, argv)
+    args = parser.parse_args(argv)
+    return apply_parameter_set(args, explicit_dests)
+
+
 def main():
     parser = build_argument_parser()
-    args = parser.parse_args()
+    args = parse_arguments(parser)
 
     random.seed(args.seed)
 
@@ -236,7 +289,7 @@ def main():
                 summary_file.close()
 
         print(f"\n{'=' * 70}")
-        print(f"  Summary (variant={args.variant})")
+        print(f"  Summary (variant={args.variant}, param_set={args.param_set})")
         print(f"{'=' * 70}")
         print(f"{'Instance':<35} {'Initial':>12} {'Final':>12} {'Improv%':>10}")
         print(f"{'-' * 70}")
