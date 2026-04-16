@@ -1,3 +1,5 @@
 models/__pycache__/
 output/
 validator/__pycache__/
+__pycache__/
+irace_output/

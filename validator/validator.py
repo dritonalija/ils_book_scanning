@@ -1,38 +1,5 @@
-import sys
 import os
-from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QSpacerItem, QSizePolicy
-)
-
-def read_input_file(input_path):
-    with open(input_path, 'r') as file:
-        lines = file.readlines()
-    B, L, D = map(int, lines[0].strip().split())
-    book_scores = list(map(int, lines[1].strip().split()))
-    libraries = []
-    for i in range(2, len(lines), 2):
-        if i + 1 >= len(lines):
-            break
-        N, T, M = map(int, lines[i].strip().split())
-        books = set(map(int, lines[i + 1].strip().split()))
-        libraries.append((N, T, M, books))
-    return B, L, D, book_scores, libraries
-
-def read_output_file(output_path):
-    with open(output_path, 'r') as file:
-        lines = file.readlines()
-    num_libraries = int(lines[0].strip())
-    solution = []
-    index = 1
-    for _ in range(num_libraries):
-        if index >= len(lines):
-            break
-        lib_id, num_books = map(int, lines[index].strip().split())
-        index += 1
-        books = list(map(int, lines[index].strip().split()))
-        index += 1
-        solution.append((lib_id, num_books, books))
-    return num_libraries, solution
+import sys
 
 def read_input_file(input_path):
     with open(input_path, 'r') as file:
@@ -185,62 +152,6 @@ def validate_solution(input_path, output_path, isConsoleApplication = False):
     
     return result
 
-class ValidatorApp(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.initUI()
-    
-    def initUI(self):
-        self.setWindowTitle('Hash Code 2020 Validator')
-        self.setGeometry(100, 100, 600, 400)
-        layout = QVBoxLayout()
-        
-        self.input_label = QLabel("Input file: None")
-        layout.addWidget(self.input_label)
-        self.input_button = QPushButton("Browse Input File")
-        self.input_button.clicked.connect(self.browse_input)
-        layout.addWidget(self.input_button)
-        
-        self.output_label = QLabel("Output file: None")
-        layout.addWidget(self.output_label)
-        self.output_button = QPushButton("Browse Output File")
-        self.output_button.clicked.connect(self.browse_output)
-        layout.addWidget(self.output_button)
-        
-        spacer = QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        layout.addItem(spacer)
-
-        self.validate_button = QPushButton("Validate Solution")
-        self.validate_button.clicked.connect(self.validate)
-        layout.addWidget(self.validate_button)
-        
-        self.result_text = QTextEdit()
-        self.result_text.setReadOnly(True)
-        layout.addWidget(self.result_text)
-        
-        self.setLayout(layout)
-        self.input_path = None
-        self.output_path = None
-    
-    def browse_input(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open Input File", "", "Text Files (*.txt)")
-        if file_name:
-            self.input_path = file_name
-            self.input_label.setText(f"Input file: {os.path.basename(file_name)}")
-    
-    def browse_output(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open Output File", "", "Text Files (*.txt)")
-        if file_name:
-            self.output_path = file_name
-            self.output_label.setText(f"Output file: {os.path.basename(file_name)}")
-    
-    def validate(self):
-        if not self.input_path or not self.output_path:
-            self.result_text.setText("Please select both input and output files.")
-            return
-        result = validate_solution(self.input_path, self.output_path)
-        self.result_text.setText(result)
-
 def main():
     if len(sys.argv) == 3:
         input_path = sys.argv[1]
@@ -248,6 +159,70 @@ def main():
         result = validate_solution(input_path, output_path, True)
         print(result)
     else:
+        try:
+            from PyQt6.QtWidgets import (
+                QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QSpacerItem, QSizePolicy
+            )
+        except ModuleNotFoundError:
+            print("PyQt6 is required for GUI mode. Use: python validator\\validator.py <input> <output>")
+            return
+
+        class ValidatorApp(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.initUI()
+            
+            def initUI(self):
+                self.setWindowTitle('Hash Code 2020 Validator')
+                self.setGeometry(100, 100, 600, 400)
+                layout = QVBoxLayout()
+                
+                self.input_label = QLabel("Input file: None")
+                layout.addWidget(self.input_label)
+                self.input_button = QPushButton("Browse Input File")
+                self.input_button.clicked.connect(self.browse_input)
+                layout.addWidget(self.input_button)
+                
+                self.output_label = QLabel("Output file: None")
+                layout.addWidget(self.output_label)
+                self.output_button = QPushButton("Browse Output File")
+                self.output_button.clicked.connect(self.browse_output)
+                layout.addWidget(self.output_button)
+                
+                spacer = QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+                layout.addItem(spacer)
+
+                self.validate_button = QPushButton("Validate Solution")
+                self.validate_button.clicked.connect(self.validate)
+                layout.addWidget(self.validate_button)
+                
+                self.result_text = QTextEdit()
+                self.result_text.setReadOnly(True)
+                layout.addWidget(self.result_text)
+                
+                self.setLayout(layout)
+                self.input_path = None
+                self.output_path = None
+            
+            def browse_input(self):
+                file_name, _ = QFileDialog.getOpenFileName(self, "Open Input File", "", "Text Files (*.txt)")
+                if file_name:
+                    self.input_path = file_name
+                    self.input_label.setText(f"Input file: {os.path.basename(file_name)}")
+            
+            def browse_output(self):
+                file_name, _ = QFileDialog.getOpenFileName(self, "Open Output File", "", "Text Files (*.txt)")
+                if file_name:
+                    self.output_path = file_name
+                    self.output_label.setText(f"Output file: {os.path.basename(file_name)}")
+            
+            def validate(self):
+                if not self.input_path or not self.output_path:
+                    self.result_text.setText("Please select both input and output files.")
+                    return
+                result = validate_solution(self.input_path, self.output_path)
+                self.result_text.setText(result)
+
         app = QApplication(sys.argv)
         validator = ValidatorApp()
         validator.show()
