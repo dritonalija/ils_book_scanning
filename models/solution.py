@@ -76,6 +76,7 @@ class Solution:
     def _rebuild_fast(self, order, data, flat):
         from models.evaluation import (
             fast_evaluate_detailed,
+            fast_evaluate_detailed_balanced_global,
             fast_evaluate_detailed_global,
         )
 
@@ -92,6 +93,9 @@ class Solution:
             out_selected_global = workspace["out_selected_global"]
             out_books_global = workspace["out_books_global"]
             out_book_libs_global = workspace["out_book_libs_global"]
+            out_selected_balanced = workspace["out_selected_balanced"]
+            out_books_balanced = workspace["out_books_balanced"]
+            out_book_libs_balanced = workspace["out_book_libs_balanced"]
         else:
             signed_arr = np.empty(order_len, dtype=np.int32)
             if order_len:
@@ -102,6 +106,9 @@ class Solution:
             out_selected_global = np.empty(max(1, len(order)), dtype=np.int32)
             out_books_global = np.empty(max(1, flat["n_books"]), dtype=np.int32)
             out_book_libs_global = np.empty(max(1, flat["n_books"]), dtype=np.int32)
+            out_selected_balanced = np.empty(max(1, len(order)), dtype=np.int32)
+            out_books_balanced = np.empty(max(1, flat["n_books"]), dtype=np.int32)
+            out_book_libs_balanced = np.empty(max(1, flat["n_books"]), dtype=np.int32)
 
         seq_score, seq_selected_count, seq_assigned_count = fast_evaluate_detailed(
             signed_arr,
@@ -116,36 +123,69 @@ class Solution:
             out_books,
             out_book_libs,
         )
-        global_score, global_selected_count, global_assigned_count = fast_evaluate_detailed_global(
-            signed_arr,
-            flat["libs_signup"],
-            flat["libs_rate"],
-            flat["lib_num_books"],
-            flat["books_by_score"],
-            flat["book_libs_flat"],
-            flat["book_libs_offsets"],
-            flat["book_libs_lengths"],
-            flat["book_scores"],
-            flat["total_days"],
-            out_selected_global,
-            out_books_global,
-            out_book_libs_global,
-        )
 
-        if global_score > seq_score:
-            score = global_score
-            selected_count = global_selected_count
-            assigned_count = global_assigned_count
-            selected_arr = out_selected_global
-            books_arr = out_books_global
-            book_libs_arr = out_book_libs_global
-        else:
-            score = seq_score
-            selected_count = seq_selected_count
-            assigned_count = seq_assigned_count
-            selected_arr = out_selected
-            books_arr = out_books
-            book_libs_arr = out_book_libs
+        score = seq_score
+        selected_count = seq_selected_count
+        assigned_count = seq_assigned_count
+        selected_arr = out_selected
+        books_arr = out_books
+        book_libs_arr = out_book_libs
+
+        sequential_only = (
+            hasattr(data, "use_sequential_assignment_only")
+            and data.use_sequential_assignment_only()
+        )
+        if not sequential_only:
+            global_score, global_selected_count, global_assigned_count = (
+                fast_evaluate_detailed_global(
+                    signed_arr,
+                    flat["libs_signup"],
+                    flat["libs_rate"],
+                    flat["lib_num_books"],
+                    flat["books_by_score"],
+                    flat["book_libs_flat"],
+                    flat["book_libs_offsets"],
+                    flat["book_libs_lengths"],
+                    flat["book_scores"],
+                    flat["total_days"],
+                    out_selected_global,
+                    out_books_global,
+                    out_book_libs_global,
+                )
+            )
+            if global_score > score:
+                score = global_score
+                selected_count = global_selected_count
+                assigned_count = global_assigned_count
+                selected_arr = out_selected_global
+                books_arr = out_books_global
+                book_libs_arr = out_book_libs_global
+
+            if hasattr(data, "use_balanced_assignment") and data.use_balanced_assignment():
+                balanced_score, balanced_selected_count, balanced_assigned_count = (
+                    fast_evaluate_detailed_balanced_global(
+                        signed_arr,
+                        flat["libs_signup"],
+                        flat["libs_rate"],
+                        flat["lib_num_books"],
+                        flat["books_by_score"],
+                        flat["book_libs_flat"],
+                        flat["book_libs_offsets"],
+                        flat["book_libs_lengths"],
+                        flat["book_scores"],
+                        flat["total_days"],
+                        out_selected_balanced,
+                        out_books_balanced,
+                        out_book_libs_balanced,
+                    )
+                )
+                if balanced_score > score:
+                    score = balanced_score
+                    selected_count = balanced_selected_count
+                    assigned_count = balanced_assigned_count
+                    selected_arr = out_selected_balanced
+                    books_arr = out_books_balanced
+                    book_libs_arr = out_book_libs_balanced
 
         scanned_per_lib = {}
         scanned_books = set()
@@ -171,9 +211,33 @@ class Solution:
 
     def _rebuild_python(self, order, data):
         """Pure Python rebuild used when compiled evaluation is unavailable."""
-        selected, capacities, positions = self._feasible_libraries(order, data)
-        scanned_per_lib, scanned_books, fitness_score = self._assign_books_global(
-            selected, capacities, positions, data)
+        selected, capacities, raw_capacities, positions = (
+            self._feasible_libraries(order, data)
+        )
+
+        scanned_per_lib, scanned_books, fitness_score = self._assign_books_sequential(
+            selected, capacities, data)
+
+        sequential_only = (
+            hasattr(data, "use_sequential_assignment_only")
+            and data.use_sequential_assignment_only()
+        )
+        if not sequential_only:
+            global_per_lib, global_books, global_score = self._assign_books_global(
+                selected, capacities, positions, data)
+            if global_score > fitness_score:
+                scanned_per_lib = global_per_lib
+                scanned_books = global_books
+                fitness_score = global_score
+
+            if hasattr(data, "use_balanced_assignment") and data.use_balanced_assignment():
+                balanced_per_lib, balanced_books, balanced_score = (
+                    self._assign_books_balanced_global(selected, raw_capacities, data)
+                )
+                if balanced_score > fitness_score:
+                    scanned_per_lib = balanced_per_lib
+                    scanned_books = balanced_books
+                    fitness_score = balanced_score
 
         signed_libraries = [lid for lid in selected if scanned_per_lib.get(lid)]
         signed_set = set(signed_libraries)
@@ -188,6 +252,7 @@ class Solution:
         day = 0
         selected = []
         capacities = {}
+        raw_capacities = {}
         positions = {}
 
         for position, lib_id in enumerate(order):
@@ -201,9 +266,30 @@ class Solution:
                 continue
             selected.append(lib_id)
             capacities[lib_id] = min(capacity, data.lib_num_books[lib_id])
+            raw_capacities[lib_id] = capacity
             positions[lib_id] = position
 
-        return selected, capacities, positions
+        return selected, capacities, raw_capacities, positions
+
+    def _assign_books_sequential(self, selected, capacities, data):
+        scanned_per_lib = {lib_id: [] for lib_id in selected}
+        scanned_books = set()
+        fitness_score = 0
+
+        for lib_id in selected:
+            capacity = capacities[lib_id]
+            taken = 0
+            for book_id in data.lib_book_ids[lib_id]:
+                if taken >= capacity:
+                    break
+                if book_id in scanned_books:
+                    continue
+                scanned_per_lib[lib_id].append(book_id)
+                scanned_books.add(book_id)
+                fitness_score += data.scores[book_id]
+                taken += 1
+
+        return scanned_per_lib, scanned_books, fitness_score
 
     def _assign_books_global(self, selected, capacities, positions, data):
         scanned_per_lib = {lib_id: [] for lib_id in selected}
@@ -248,6 +334,53 @@ class Solution:
             for lib_id in data.book_libs[book_id]:
                 if active[lib_id]:
                     remaining_candidates[lib_id] -= 1
+
+        scanned_books = {
+            book_id
+            for books in scanned_per_lib.values()
+            for book_id in books
+        }
+        return scanned_per_lib, scanned_books, fitness_score
+
+    def _assign_books_balanced_global(self, selected, capacities, data):
+        scanned_per_lib = {lib_id: [] for lib_id in selected}
+        if not selected:
+            return scanned_per_lib, set(), 0
+
+        num_libs = data.num_libs
+        active = bytearray(num_libs)
+        remaining_capacity = [0] * num_libs
+        fitness_score = 0
+
+        for lib_id in selected:
+            active[lib_id] = 1
+            remaining_capacity[lib_id] = capacities[lib_id]
+
+        for book_id in data.books_by_score:
+            best_lib = None
+            best_ratio = -1.0
+            best_capacity = -1
+            for lib_id in data.book_libs[book_id]:
+                capacity = remaining_capacity[lib_id]
+                if not active[lib_id] or capacity <= 0:
+                    continue
+                size = data.lib_num_books[lib_id]
+                if size <= 0:
+                    size = 1
+                ratio = capacity / size
+                if ratio > best_ratio or (
+                    ratio == best_ratio and capacity > best_capacity
+                ):
+                    best_ratio = ratio
+                    best_capacity = capacity
+                    best_lib = lib_id
+
+            if best_lib is None:
+                continue
+
+            scanned_per_lib[best_lib].append(book_id)
+            remaining_capacity[best_lib] -= 1
+            fitness_score += data.scores[book_id]
 
         scanned_books = {
             book_id

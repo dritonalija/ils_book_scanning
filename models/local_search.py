@@ -7,11 +7,14 @@ from models.tweaks import Tweaks
 
 class LocalSearch:
     @staticmethod
-    def _weighted_methods(tweak_weights=None):
+    def _weighted_methods(tweak_weights=None, data=None):
         methods = Tweaks.get_tweak_methods()
+        weights = tweak_weights or Tweaks.DEFAULT_WEIGHTS
+        if data is not None:
+            weights = Tweaks.instance_adjusted_weights(weights, data)
         labels = [label for label, _ in methods]
         probs = [
-            (tweak_weights or Tweaks.DEFAULT_WEIGHTS).get(label, 0.0)
+            weights.get(label, 0.0)
             for label in labels
         ]
         if sum(probs) <= 0:
@@ -94,6 +97,7 @@ class LocalSearch:
         max_iterations=1000,
         no_improve_limit=250,
         tweak_weights=None,
+        operator_stats=None,
     ):
         start_time = time.time()
         current_solution = solution.clone()
@@ -103,30 +107,65 @@ class LocalSearch:
         )
         iterations = 0
         stagnant = 0
-        methods, probs = LocalSearch._weighted_methods(tweak_weights)
+        methods, probs = LocalSearch._weighted_methods(tweak_weights, data)
 
         while (time.time() - start_time < time_limit) and (iterations < max_iterations):
             label, tweak_method = random.choices(methods, weights=probs, k=1)[0]
             new_solution = None
+            new_proxy_score = None
+            if operator_stats is not None:
+                stats = operator_stats.setdefault(
+                    label,
+                    {
+                        "attempts": 0,
+                        "proxy_improved": 0,
+                        "exact_checked": 0,
+                        "accepted": 0,
+                        "rejected": 0,
+                    },
+                )
+                stats["attempts"] += 1
+            else:
+                stats = None
 
             if label in Tweaks.FAST_ORDER_OPERATORS:
                 order = Tweaks.build_candidate_order(label, current_solution, data)
                 if order is not None:
-                    score = data.screen_evaluate_sequential(order)
-                    if score > current_proxy_score:
-                        new_solution = Solution.from_order(order, data)
+                    proxy_score = data.screen_evaluate_sequential(order)
+                    if proxy_score > current_proxy_score:
+                        if stats is not None:
+                            stats["proxy_improved"] += 1
+                        exact_score = data.fast_evaluate(order)
+                        if stats is not None:
+                            stats["exact_checked"] += 1
+                        if exact_score > current_solution.fitness_score:
+                            candidate = Solution.from_order(order, data)
+                            if candidate.fitness_score > current_solution.fitness_score:
+                                new_solution = candidate
+                                new_proxy_score = proxy_score
             else:
-                new_solution = tweak_method(current_solution, data)
+                candidate = tweak_method(current_solution, data)
+                if (
+                    candidate is not None
+                    and candidate.fitness_score > current_solution.fitness_score
+                ):
+                    new_solution = candidate
 
             if new_solution is not None:
                 current_solution = new_solution
-                current_proxy_score = data.screen_evaluate_sequential(
-                    current_solution.ordered_libraries()
+                current_proxy_score = (
+                    new_proxy_score
+                    if new_proxy_score is not None
+                    else data.screen_evaluate_sequential(current_solution.ordered_libraries())
                 )
                 stagnant = 0
+                if stats is not None:
+                    stats["accepted"] += 1
                 if current_solution.fitness_score > best_solution.fitness_score:
                     best_solution = current_solution.clone()
             else:
+                if stats is not None:
+                    stats["rejected"] += 1
                 stagnant += 1
                 if stagnant >= no_improve_limit:
                     break
@@ -160,7 +199,7 @@ class LocalSearch:
                 order = base_order.copy()
                 order[i], order[i + 1] = order[i + 1], order[i]
                 checks += 1
-                if data.screen_evaluate(order) > best_candidate.fitness_score:
+                if data.fast_evaluate(order) > best_candidate.fitness_score:
                     candidate = Solution.from_order(order, data)
                     if candidate.fitness_score > best_candidate.fitness_score:
                         best_candidate = candidate
@@ -178,7 +217,7 @@ class LocalSearch:
                     lib_id = order.pop(i)
                     order.insert(j, lib_id)
                     checks += 1
-                    if data.screen_evaluate(order) > best_candidate.fitness_score:
+                    if data.fast_evaluate(order) > best_candidate.fitness_score:
                         candidate = Solution.from_order(order, data)
                         if candidate.fitness_score > best_candidate.fitness_score:
                             best_candidate = candidate
@@ -200,7 +239,7 @@ class LocalSearch:
                         order = base_order.copy()
                         order[i], order[j] = order[j], order[i]
                         boundary_checks += 1
-                        if data.screen_evaluate(order) > best_candidate.fitness_score:
+                        if data.fast_evaluate(order) > best_candidate.fitness_score:
                             candidate = Solution.from_order(order, data)
                             if candidate.fitness_score > best_candidate.fitness_score:
                                 best_candidate = candidate

@@ -29,6 +29,7 @@ class InitialSolution:
             print("\nGenerating Initial Solutions...")
 
         constructors = InitialSolution._build_constructor_plan(
+            data=data,
             alphas=alphas,
             beta=beta,
         )
@@ -85,8 +86,26 @@ class InitialSolution:
     def generate_adaptive_restart_solution(data, alphas=None):
         alphas = alphas or [0.5, 1.0, 1.5, 2.0]
         alpha = random.choice(alphas)
-        potential_mode = random.choice(["top_raw", "top_rare", "cap_raw", "cap_rare"])
         noise = random.uniform(0.03, 0.10)
+        if random.random() < 0.25:
+            rarity_weighted = random.random() < 0.5
+            beta = random.choice([10.0, 20.0, 30.0])
+            gamma = random.choice([1.5, 2.0, 2.5])
+            order = InitialSolution._build_order_fill_ratio_heap(
+                data,
+                alpha=alpha,
+                beta=beta,
+                gamma=gamma,
+                rarity_weighted=rarity_weighted,
+                noise=noise,
+            )
+            mode = "fill_rare" if rarity_weighted else "fill_raw"
+            return (
+                Solution.from_order(order, data),
+                f"fresh:{mode}/a={alpha}/b={beta:.0f}/g={gamma:.1f}/n={noise:.2f}",
+            )
+
+        potential_mode = random.choice(["top_raw", "top_rare", "cap_raw", "cap_rare"])
         order = InitialSolution._build_order_adaptive_heap(
             data,
             alpha=alpha,
@@ -186,6 +205,129 @@ class InitialSolution:
 
         order.extend(sorted(remaining))
         return Solution.from_order(order, data)
+
+    @staticmethod
+    def _is_uniform_coverage_instance(data):
+        if data.num_books == 0 or data.num_libs == 0:
+            return False
+        first_score = data.scores[0]
+        first_signup = data.lib_signup_days[0]
+        first_rate = data.lib_books_per_day[0]
+        return (
+            all(score == first_score for score in data.scores)
+            and all(signup == first_signup for signup in data.lib_signup_days)
+            and all(rate == first_rate for rate in data.lib_books_per_day)
+            and first_signup > 0
+            and first_rate > 0
+        )
+
+    @staticmethod
+    def _build_order_uniform_coverage(data, alpha=1.0, beta=1.0, max_passes=120):
+        covered = bytearray(data.num_books)
+        selected_flag = [False] * data.num_libs
+        versions = [0] * data.num_libs
+        heap = []
+
+        def key(lib_id):
+            raw_score = 0
+            rare_score = 0.0
+            useful_count = 0
+            for book_id in data.lib_book_ids[lib_id]:
+                if covered[book_id]:
+                    continue
+                raw_score += data.scores[book_id]
+                rare_score += data.scores[book_id] / max(1, data.book_freq[book_id])
+                useful_count += 1
+            if raw_score <= 0:
+                return None
+
+            signup = data.lib_signup_days[lib_id]
+            denom = (signup + beta) ** alpha
+            return raw_score / denom, rare_score, useful_count, -signup, -lib_id
+
+        for lib_id in range(data.num_libs):
+            candidate_key = key(lib_id)
+            if candidate_key is not None:
+                heapq.heappush(heap, tuple(-value for value in candidate_key) + (lib_id, 0))
+
+        signup = data.lib_signup_days[0]
+        budget = max(0, data.num_days - 1 - signup)
+        used_signup = 0
+        selected = []
+        cover_count = [0] * data.num_books
+
+        while heap:
+            item = heapq.heappop(heap)
+            lib_id = item[-2]
+            version = item[-1]
+            if selected_flag[lib_id] or version != versions[lib_id]:
+                continue
+            if used_signup + data.lib_signup_days[lib_id] > budget:
+                continue
+
+            candidate_key = key(lib_id)
+            if candidate_key is None:
+                continue
+            current_item = tuple(-value for value in candidate_key) + (lib_id, version)
+            if current_item[:-2] != item[:-2]:
+                versions[lib_id] += 1
+                heapq.heappush(
+                    heap,
+                    tuple(-value for value in candidate_key) + (lib_id, versions[lib_id]),
+                )
+                continue
+
+            selected_flag[lib_id] = True
+            selected.append(lib_id)
+            used_signup += data.lib_signup_days[lib_id]
+            for book_id in data.lib_book_ids[lib_id]:
+                covered[book_id] = 1
+                cover_count[book_id] += 1
+
+        if selected and max_passes > 0:
+            from models.coverage_search import improve_coverage_one_swap
+
+            selected, selected_flag, cover_count = improve_coverage_one_swap(
+                data,
+                selected,
+                selected_flag,
+                cover_count,
+                max_passes=max_passes,
+            )
+
+        selected.sort(
+            key=lambda lib_id: (
+                data.lib_num_books[lib_id] / max(1, data.lib_books_per_day[lib_id]),
+                data.lib_num_books[lib_id],
+                -data.lib_signup_days[lib_id],
+                lib_id,
+            ),
+            reverse=True,
+        )
+        uncovered_best = {}
+        for lib_id in range(data.num_libs):
+            if selected_flag[lib_id]:
+                continue
+            best = 0
+            for book_id in data.lib_book_ids[lib_id]:
+                if cover_count[book_id] == 0 and data.scores[book_id] > best:
+                    best = data.scores[book_id]
+            uncovered_best[lib_id] = best
+
+        order = list(selected)
+        order.extend(
+            sorted(
+                (lib_id for lib_id in range(data.num_libs) if not selected_flag[lib_id]),
+                key=lambda lib_id: (
+                    uncovered_best[lib_id],
+                    data.lib_num_books[lib_id],
+                    -data.lib_signup_days[lib_id],
+                    lib_id,
+                ),
+                reverse=True,
+            )
+        )
+        return order
 
     @staticmethod
     def generate_initial_greedy_heap(
@@ -355,6 +497,164 @@ class InitialSolution:
         return order
 
     @staticmethod
+    def _build_order_fill_ratio_heap(
+        data,
+        alpha=1.0,
+        beta=20.0,
+        gamma=2.0,
+        rarity_weighted=False,
+        noise=0.0,
+    ):
+        heap = []
+        used_books = set()
+        used_libs = set()
+        order = []
+        day = 0
+
+        for lib_id in range(data.num_libs):
+            score = InitialSolution._library_fill_value(
+                data,
+                lib_id,
+                day,
+                used_books,
+                alpha=alpha,
+                beta=beta,
+                gamma=gamma,
+                rarity_weighted=rarity_weighted,
+                noise=noise,
+            )
+            if score > 0:
+                heapq.heappush(heap, (-score, lib_id, day, len(order)))
+
+        while heap and day < data.num_days:
+            neg_score, lib_id, scored_day, scored_version = heapq.heappop(heap)
+            if lib_id in used_libs:
+                continue
+
+            if scored_day != day or scored_version != len(order):
+                refreshed = InitialSolution._library_fill_value(
+                    data,
+                    lib_id,
+                    day,
+                    used_books,
+                    alpha=alpha,
+                    beta=beta,
+                    gamma=gamma,
+                    rarity_weighted=rarity_weighted,
+                    noise=noise,
+                )
+                if refreshed > 0:
+                    heapq.heappush(heap, (-refreshed, lib_id, day, len(order)))
+                continue
+
+            if -neg_score <= 0:
+                break
+
+            order.append(lib_id)
+            used_libs.add(lib_id)
+            day += data.lib_signup_days[lib_id]
+            InitialSolution._mark_greedy_books(data, lib_id, day, used_books)
+
+        order.extend(lib_id for lib_id in range(data.num_libs) if lib_id not in used_libs)
+        return order
+
+    @staticmethod
+    def _build_order_branch_fill_greedy(data, alpha=1.575, gamma=30.0):
+        planned = bytearray(data.num_books)
+        selected = bytearray(data.num_libs)
+        order = []
+        current_day = 0
+        denom = [
+            (data.lib_signup_days[lib_id] + 1) ** alpha
+            for lib_id in range(data.num_libs)
+        ]
+        heap = []
+
+        for lib_id in range(data.num_libs):
+            upper = sum(data.scores[book_id] for book_id in data.lib_book_ids[lib_id])
+            if upper > 0:
+                heapq.heappush(heap, (-(upper / denom[lib_id]), lib_id))
+
+        def upper_bound(lib_id):
+            value = 0
+            for book_id in data.lib_book_ids[lib_id]:
+                if not planned[book_id]:
+                    value += data.scores[book_id]
+            return value / denom[lib_id]
+
+        def actual_value(lib_id):
+            scan_days = data.num_days - current_day - data.lib_signup_days[lib_id]
+            if scan_days <= 0:
+                return (-1.0, 0, 0), []
+
+            capacity = scan_days * data.lib_books_per_day[lib_id]
+            if capacity <= 0:
+                return (-1.0, 0, 0), []
+
+            chosen = []
+            raw_score = 0
+            for book_id in data.lib_book_ids[lib_id]:
+                if planned[book_id]:
+                    continue
+                chosen.append(book_id)
+                raw_score += data.scores[book_id]
+                if len(chosen) >= capacity:
+                    break
+
+            if not chosen:
+                return (-1.0, 0, 0), []
+
+            fill = len(chosen) / max(1, min(capacity, data.lib_num_books[lib_id]))
+            key = raw_score * (fill ** gamma) / denom[lib_id]
+            return (key, raw_score, -data.lib_signup_days[lib_id]), chosen
+
+        while heap and current_day < data.num_days:
+            best_key = None
+            best_lib = -1
+            best_books = []
+            touched = []
+
+            while heap:
+                _old_upper, lib_id = heapq.heappop(heap)
+                if selected[lib_id]:
+                    continue
+
+                upper = upper_bound(lib_id)
+                key, books = actual_value(lib_id)
+                if key[1] <= 0:
+                    selected[lib_id] = 1
+                    continue
+
+                touched.append((-upper, lib_id))
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_lib = lib_id
+                    best_books = books
+
+                next_upper = -heap[0][0] if heap else -1.0
+                if best_key[0] >= next_upper - 1e-12:
+                    break
+
+            for item in touched:
+                if item[1] != best_lib and not selected[item[1]]:
+                    heapq.heappush(heap, item)
+
+            if best_lib < 0:
+                break
+            signup = data.lib_signup_days[best_lib]
+            if current_day + signup >= data.num_days:
+                break
+
+            selected[best_lib] = 1
+            current_day += signup
+            order.append(best_lib)
+            for book_id in best_books:
+                planned[book_id] = 1
+
+        order.extend(lib_id for lib_id in range(data.num_libs) if not selected[lib_id])
+        return order
+
+    @staticmethod
     def generate_initial_weighted_efficiency(data, alpha=1.0, beta=0.12):
         order = InitialSolution._build_order_weighted_efficiency(data, alpha=alpha, beta=beta)
         return Solution.from_order(order, data)
@@ -471,6 +771,54 @@ class InitialSolution:
         return gain
 
     @staticmethod
+    def _library_fill_value(
+        data,
+        lib_id,
+        current_day,
+        used_books,
+        alpha=1.0,
+        beta=20.0,
+        gamma=2.0,
+        rarity_weighted=False,
+        noise=0.0,
+    ):
+        signup_days = data.lib_signup_days[lib_id]
+        if current_day + signup_days >= data.num_days:
+            return 0.0
+
+        remaining_days = data.num_days - (current_day + signup_days)
+        capacity = remaining_days * data.lib_books_per_day[lib_id]
+        if capacity <= 0:
+            return 0.0
+
+        useful_limit = min(capacity, data.lib_num_books[lib_id])
+        if useful_limit <= 0:
+            return 0.0
+
+        value = 0.0
+        useful_count = 0
+        for book_id in data.lib_book_ids[lib_id]:
+            if book_id in used_books:
+                continue
+            if rarity_weighted:
+                value += data.scores[book_id] / max(1, data.book_freq[book_id])
+            else:
+                value += data.scores[book_id]
+            useful_count += 1
+            if useful_count >= capacity:
+                break
+
+        if value <= 0.0 or useful_count <= 0:
+            return 0.0
+
+        fill_ratio = useful_count / max(1, useful_limit)
+        denom = (signup_days + beta) ** alpha
+        score = value * (fill_ratio ** gamma) / max(1.0, denom)
+        if noise > 0.0:
+            score *= 1.0 + random.uniform(-noise, noise)
+        return score
+
+    @staticmethod
     def _library_value(
         data,
         lib_id,
@@ -519,7 +867,7 @@ class InitialSolution:
         return score
 
     @staticmethod
-    def _build_constructor_plan(alphas, beta):
+    def _build_constructor_plan(data, alphas, beta):
         constructors = [("Sorted", InitialSolution._build_order_sorted, {})]
         for alpha in alphas:
             constructors.append(
@@ -543,6 +891,28 @@ class InitialSolution:
                     {"alpha": weighted_alpha, "potential_mode": "cap_rare"},
                 ),
                 (
+                    f"Fill Greedy raw alpha={weighted_alpha}",
+                    InitialSolution._build_order_fill_ratio_heap,
+                    {"alpha": weighted_alpha, "rarity_weighted": False},
+                ),
+                (
+                    f"Fill Greedy rare alpha={weighted_alpha}",
+                    InitialSolution._build_order_fill_ratio_heap,
+                    {"alpha": weighted_alpha, "rarity_weighted": True},
+                ),
+            ]
+        )
+        if data.num_libs <= 3000:
+            constructors.append(
+                (
+                    "Branch Fill Greedy alpha=1.575 gamma=30.0",
+                    InitialSolution._build_order_branch_fill_greedy,
+                    {"alpha": 1.575, "gamma": 30.0},
+                )
+            )
+        constructors.extend(
+            [
+                (
                     f"Static Greedy cap/raw alpha={weighted_alpha}",
                     InitialSolution._build_order_static_priority,
                     {"alpha": weighted_alpha, "potential_mode": "cap_raw"},
@@ -564,4 +934,13 @@ class InitialSolution:
                 ),
             ]
         )
+        if InitialSolution._is_uniform_coverage_instance(data):
+            constructors.insert(
+                1,
+                (
+                    "Uniform Coverage Greedy + 1-swap",
+                    InitialSolution._build_order_uniform_coverage,
+                    {"alpha": 1.0, "beta": 1.0, "max_passes": 220},
+                ),
+            )
         return constructors

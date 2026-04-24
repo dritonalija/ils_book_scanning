@@ -15,6 +15,7 @@ PARAMETER_SETS = {
     "default": {
         "description": "Baseline configuration reproducing the earlier manually chosen CLI defaults.",
         "accept_worse_prob": 0.04,
+        "sa_final_temperature_ratio": 0.05,
         "grasp_rcl": 0.05,
         "restart_init_budget_ratio": 0.30,
         "perturb_replace_bias": 0.65,
@@ -25,8 +26,12 @@ PARAMETER_SETS = {
         "alphas": ALPHA_POOLS["default"],
     },
     "irace": {
-        "description": "Tuned configuration obtained from the best final iRace postselection candidate.",
+        "description": (
+            "Configuration seeded from the best iRace postselection candidate; "
+            "accept_worse_prob is interpreted by the current SA acceptance rule."
+        ),
         "accept_worse_prob": 0.1466,
+        "sa_final_temperature_ratio": 0.05,
         "restart_threshold": 7,
         "perturb_strength_base": 4,
         "perturb_strength_growth": 3,

@@ -1,4 +1,5 @@
 accept_worse_prob      "--accept-worse-prob "      r   (0.001, 0.15)
+sa_final_temperature_ratio "--sa-final-temperature-ratio " r (0.01, 0.25)
 restart_threshold      "--restart-threshold "      i   (2, 12)
 perturb_strength_base  "--perturb-strength-base "  i   (2, 15)
 perturb_strength_growth "--perturb-strength-growth " i  (0, 6)

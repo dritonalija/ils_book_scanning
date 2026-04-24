@@ -3,7 +3,6 @@
 import argparse
 import csv
 import os
-import random
 import sys
 import time
 
@@ -16,6 +15,11 @@ from parameter_sets import (
     DEFAULT_PARAMETER_SET_NAME,
     PARAMETER_SETS,
     get_parameter_set,
+)
+from validator.validator import (
+    read_input_file,
+    read_output_file,
+    validate_solution,
 )
 
 
@@ -52,6 +56,11 @@ def append_summary_row(csv_writer, file_name, elapsed_s, running_elapsed_s,
     ])
 
 
+def default_summary_csv_path(input_dir, output_dir):
+    input_name = os.path.basename(os.path.normpath(input_dir)) or "batch"
+    return os.path.join(output_dir, f"batch_summary_{input_name}.csv")
+
+
 def collect_explicit_dests(parser, argv):
     explicit_dests = set()
     option_to_dest = {}
@@ -82,12 +91,45 @@ def apply_parameter_set(args, explicit_dests):
     return args
 
 
+def validated_output_score(input_path, output_path):
+    verdict = validate_solution(input_path, output_path, isConsoleApplication=True)
+    if verdict != "Valid":
+        details = validate_solution(input_path, output_path)
+        raise ValueError(
+            f"Validator rejected {os.path.basename(output_path)}:\n{details}"
+        )
+
+    _books, _libs, _days, book_scores, _libraries = read_input_file(input_path)
+    _num_libraries, solution = read_output_file(output_path)
+    scanned_books = set()
+    total_score = 0
+    for _lib_id, _num_books, books in solution:
+        unique_books = [book for book in books if book not in scanned_books]
+        scanned_books.update(unique_books)
+        total_score += sum(
+            book_scores[book]
+            for book in unique_books
+            if 0 <= book < len(book_scores)
+        )
+    return total_score
+
+
 def run_instance(args, input_path, output_path):
     parser = Parser(input_path)
     data = parser.parse()
     solver = Solver(seed=args.seed, verbose=not args.quiet)
     alpha_values = args.alphas
     instance_name = os.path.basename(input_path)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    operator_stats_csv = None
+    if args.operator_stats_csv:
+        operator_stats_csv = args.operator_stats_csv
+    elif args.operator_stats_dir:
+        stats_stem = os.path.splitext(instance_name)[0]
+        operator_stats_csv = os.path.join(
+            args.operator_stats_dir,
+            f"{stats_stem}.operators.csv",
+        )
     operator_weights = {
         label: getattr(args, f"w_{label}")
         for label in Tweaks.operator_labels()
@@ -112,6 +154,7 @@ def run_instance(args, input_path, output_path):
         perturb_strength_base=args.perturb_strength_base,
         perturb_strength_growth=args.perturb_strength_growth,
         accept_worse_prob=args.accept_worse_prob,
+        sa_final_temperature_ratio=args.sa_final_temperature_ratio,
         alpha_values=alpha_values,
         weighted_beta=args.weighted_beta,
         grasp_rcl=args.grasp_rcl,
@@ -124,14 +167,19 @@ def run_instance(args, input_path, output_path):
         operator_weights=operator_weights or None,
         operators=args.operators,
         enable_initial_local_search=args.enable_initial_local_search,
-        enable_direct_intensify=args.enable_direct_intensify,
         perturb_replace_bias=args.perturb_replace_bias,
         restart_fresh_probability=args.restart_fresh_probability,
         variant=args.variant,
         log_csv=log_csv,
+        operator_stats_csv=operator_stats_csv,
     )
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     result.export(output_path)
+    validator_score = validated_output_score(input_path, output_path)
+    if validator_score != result.fitness_score:
+        raise ValueError(
+            f"Score mismatch for {instance_name}: "
+            f"solver={result.fitness_score}, validator={validator_score}"
+        )
     return result
 
 
@@ -168,6 +216,12 @@ def build_argument_parser():
     parser.add_argument("--perturb-strength-base", type=int, default=None)
     parser.add_argument("--perturb-strength-growth", type=int, default=None)
     parser.add_argument("--accept-worse-prob", type=float, default=0.04)
+    parser.add_argument(
+        "--sa-final-temperature-ratio",
+        type=float,
+        default=0.05,
+        help="Final/initial temperature ratio for geometric SA cooling",
+    )
     parser.add_argument("--weighted-beta", type=float, default=0.12)
     parser.add_argument("--grasp-rcl", type=float, default=0.05)
     parser.add_argument("--grasp-max-time", type=float, default=5.0)
@@ -178,13 +232,9 @@ def build_argument_parser():
     parser.add_argument("--ls-strategic-weight", type=float, default=1.0)
     parser.add_argument(
         "--enable-initial-local-search",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="Run the pre-ILS local-search pass on the initial solution",
-    )
-    parser.add_argument(
-        "--enable-direct-intensify",
-        action="store_true",
-        help="Enable the optional pre-ILS direct intensification phase",
     )
     parser.add_argument(
         "--operators",
@@ -206,8 +256,23 @@ def build_argument_parser():
                         help="Algorithm variant for ablation study")
     parser.add_argument("--log-csv", type=str, default=None,
                         help="Directory for convergence CSV logs")
+    parser.add_argument(
+        "--operator-stats-csv",
+        type=str,
+        default=None,
+        help="Single-instance path for local-search operator statistics CSV",
+    )
+    parser.add_argument(
+        "--operator-stats-dir",
+        type=str,
+        default=None,
+        help="Directory for per-instance local-search operator statistics CSVs",
+    )
     parser.add_argument("--summary-csv", type=str, default=None,
-                        help="Path to batch summary CSV updated after each instance")
+                        help=(
+                            "Path to batch summary CSV updated after each instance; "
+                            "defaults to <output-dir>/batch_summary_<input-folder>.csv"
+                        ))
     for label in Tweaks.operator_labels():
         parser.add_argument(
             f"--w-{label.replace('_', '-')}",
@@ -231,8 +296,10 @@ def parse_arguments(parser, argv=None):
 def main():
     parser = build_argument_parser()
     args = parse_arguments(parser)
-
-    random.seed(args.seed)
+    if args.operator_stats_csv and not args.input:
+        parser.error("--operator-stats-csv can only be used with a single input instance")
+    if args.operator_stats_csv and args.operator_stats_dir:
+        parser.error("--operator-stats-csv and --operator-stats-dir are mutually exclusive")
 
     if args.input:
         output_path = args.output or os.path.join(
@@ -248,13 +315,16 @@ def main():
         running_elapsed = 0.0
         summary_file = None
         summary_writer = None
-        if args.summary_csv:
-            os.makedirs(os.path.dirname(args.summary_csv) or ".", exist_ok=True)
-            summary_file = open(args.summary_csv, "w", newline="")
-            summary_writer = csv.writer(summary_file)
-            write_summary_header(summary_writer)
-            summary_file.flush()
-        print("---------- ITERATED LOCAL SEARCH WITH RANDOM RESTARTS ----------")
+        summary_csv = args.summary_csv or default_summary_csv_path(
+            args.input_dir,
+            args.output_dir,
+        )
+        os.makedirs(os.path.dirname(summary_csv) or ".", exist_ok=True)
+        summary_file = open(summary_csv, "w", newline="")
+        summary_writer = csv.writer(summary_file)
+        write_summary_header(summary_writer)
+        summary_file.flush()
+        print("---------- ITERATED LOCAL SEARCH WITH MULTI-START STAGNATION RESTARTS ----------")
         try:
             for file in sorted(os.listdir(args.input_dir)):
                 if not file.endswith(".txt"):
@@ -281,8 +351,7 @@ def main():
                     )
                     summary_file.flush()
                 print(f"Final score for {file}: {result.fitness_score:,}")
-                if args.summary_csv:
-                    print(f"Updated summary CSV: {args.summary_csv}")
+                print(f"Updated summary CSV: {summary_csv}")
                 print("----------------------")
         finally:
             if summary_file:

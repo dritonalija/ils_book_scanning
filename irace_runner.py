@@ -22,8 +22,8 @@ DEFAULT_RESTART_INIT_BUDGET_RATIO = 0.30
 
 FLOAT_PARAMS = {
     'accept_worse_prob',
+    'sa_final_temperature_ratio',
     'grasp_rcl',
-    'grasp_max_time',
     'perturb_replace_bias',
     'restart_fresh_probability',
     'ls_order_weight',

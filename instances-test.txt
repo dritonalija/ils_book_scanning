@@ -52,6 +52,15 @@ input/seed_based/ef_060x_020t.txt
 input/seed_based/ef_090x_012t.txt
 input/seed_based/f_075x_008t.txt
 input/seed_based/f_090x_020t.txt
+input/real_world/B90_L6_D11.txt
+input/real_world/B100_L9_D18.txt
+input/real_world/B1k_L18_D17.txt
+input/real_world/B6k_L35_D70.txt
+input/real_world/B35k_L60_D120.txt
+input/real_world/B90k_L850_D21.txt
+input/real_world/B240k_L90_D180.txt
+input/real_world/B1000k_L115_D230.txt
+input/real_world/B2000k_L140_D280.txt
 input/google_hashcode/b_read_on.txt
 input/google_hashcode/c_incunabula.txt
 input/google_hashcode/d_tough_choices.txt

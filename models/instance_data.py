@@ -36,6 +36,8 @@ class InstanceData:
 
         self._flat = None
         self._rebuild_workspace = None
+        self._evaluation_workspace = None
+        self.assignment_mode = "portfolio"
 
     def _build_potentials(self):
         k_limit = 1000
@@ -132,8 +134,47 @@ class InstanceData:
                 "out_selected_global": np.empty(max_order, dtype=np.int32),
                 "out_books_global": np.empty(max_books, dtype=np.int32),
                 "out_book_libs_global": np.empty(max_books, dtype=np.int32),
+                "out_selected_balanced": np.empty(max_order, dtype=np.int32),
+                "out_books_balanced": np.empty(max_books, dtype=np.int32),
+                "out_book_libs_balanced": np.empty(max_books, dtype=np.int32),
             }
         return self._rebuild_workspace
+
+    def evaluation_workspace(self):
+        """
+        Allocate reusable buffers for fast scoring calls.
+
+        Local search evaluates many neighboring orders. Reusing these arrays
+        avoids allocating and clearing full book/library masks for every move.
+        """
+        if self._evaluation_workspace is None:
+            max_books = max(1, self.num_books)
+            max_libs = max(1, self.num_libs)
+            self._evaluation_workspace = {
+                "scanned": np.zeros(max_books, dtype=np.uint8),
+                "touched_books": np.empty(max_books, dtype=np.int32),
+                "active": np.zeros(max_libs, dtype=np.uint8),
+                "remaining_capacity": np.zeros(max_libs, dtype=np.int32),
+                "remaining_candidates": np.zeros(max_libs, dtype=np.int32),
+                "positions": np.zeros(max_libs, dtype=np.int32),
+                "touched_libs": np.empty(max_libs, dtype=np.int32),
+            }
+        return self._evaluation_workspace
+
+    def use_balanced_assignment(self):
+        """
+        Enable the extra global assignment mode where it is cheap enough.
+
+        The balanced mode is most valuable on small/medium library-count
+        instances with heavy book overlap. Keeping it off for very large
+        library-count instances avoids slowing the high-frequency local-search
+        exact checks.
+        """
+        return self.num_libs <= 3000
+
+    def use_sequential_assignment_only(self):
+        """Use only the official sequential library-order scorer for ablations."""
+        return self.assignment_mode == "sequential"
 
     def order_array_view(self, signed_order):
         workspace = self.rebuild_workspace()
@@ -148,20 +189,42 @@ class InstanceData:
         Evaluate a signed library ordering using Numba-accelerated code.
         A pure Python implementation is used when Numba is unavailable.
         """
-        from models.evaluation import fast_evaluate, fast_evaluate_global
+        from models.evaluation import (
+            fast_evaluate_balanced_global_workspace,
+            fast_evaluate_global_workspace,
+            fast_evaluate_sequential_workspace,
+        )
         flat = self.to_flat_arrays()
+        workspace = self.evaluation_workspace()
         signed_arr = self.order_array_view(signed_order)
-        sequential_score = int(fast_evaluate(
+        sequential_score = int(fast_evaluate_sequential_workspace(
             signed_arr, flat['libs_signup'], flat['libs_rate'],
             flat['books_flat'], flat['books_offsets'],
             flat['books_lengths'], flat['book_scores'],
-            flat['total_days']))
-        global_score = int(fast_evaluate_global(
+            flat['total_days'], workspace["scanned"],
+            workspace["touched_books"]))
+        if self.use_sequential_assignment_only():
+            return sequential_score
+
+        global_score = int(fast_evaluate_global_workspace(
             signed_arr, flat['libs_signup'], flat['libs_rate'],
             flat['lib_num_books'], flat['books_by_score'],
             flat['book_libs_flat'], flat['book_libs_offsets'],
             flat['book_libs_lengths'], flat['book_scores'],
-            flat['total_days']))
+            flat['total_days'], workspace["active"],
+            workspace["remaining_capacity"],
+            workspace["remaining_candidates"], workspace["positions"],
+            workspace["touched_libs"]))
+        if self.use_balanced_assignment():
+            balanced_score = int(fast_evaluate_balanced_global_workspace(
+                signed_arr, flat['libs_signup'], flat['libs_rate'],
+                flat['lib_num_books'], flat['books_by_score'],
+                flat['book_libs_flat'], flat['book_libs_offsets'],
+                flat['book_libs_lengths'], flat['book_scores'],
+                flat['total_days'], workspace["active"],
+                workspace["remaining_capacity"], workspace["positions"],
+                workspace["touched_libs"]))
+            return max(sequential_score, global_score, balanced_score)
         return max(sequential_score, global_score)
 
     def screen_evaluate(self, signed_order):
@@ -171,10 +234,14 @@ class InstanceData:
         objective better than the sequential proxy on dense instances while
         still avoiding the second evaluation pass.
         """
-        from models.evaluation import fast_evaluate_global
+        if self.use_sequential_assignment_only():
+            return self.screen_evaluate_sequential(signed_order)
+
+        from models.evaluation import fast_evaluate_global_workspace
         flat = self.to_flat_arrays()
+        workspace = self.evaluation_workspace()
         signed_arr = self.order_array_view(signed_order)
-        return int(fast_evaluate_global(
+        return int(fast_evaluate_global_workspace(
             signed_arr,
             flat['libs_signup'],
             flat['libs_rate'],
@@ -185,18 +252,24 @@ class InstanceData:
             flat['book_libs_lengths'],
             flat['book_scores'],
             flat['total_days'],
+            workspace["active"],
+            workspace["remaining_capacity"],
+            workspace["remaining_candidates"],
+            workspace["positions"],
+            workspace["touched_libs"],
         ))
 
     def screen_evaluate_sequential(self, signed_order):
         """
-        Lowest-cost screening score used during direct intensification.
-        It mirrors the proxy used in the intensification phase so that the
-        search can evaluate substantially more moves per second.
+        Lowest-cost screening score used by local search.
+        It lets the search evaluate substantially more moves per second before
+        paying for the exact fast scorer and full solution rebuild.
         """
-        from models.evaluation import fast_evaluate_sequential
+        from models.evaluation import fast_evaluate_sequential_workspace
         flat = self.to_flat_arrays()
+        workspace = self.evaluation_workspace()
         signed_arr = self.order_array_view(signed_order)
-        return int(fast_evaluate_sequential(
+        return int(fast_evaluate_sequential_workspace(
             signed_arr,
             flat['libs_signup'],
             flat['libs_rate'],
@@ -205,6 +278,8 @@ class InstanceData:
             flat['books_lengths'],
             flat['book_scores'],
             flat['total_days'],
+            workspace["scanned"],
+            workspace["touched_books"],
         ))
 
     def describe(self):
