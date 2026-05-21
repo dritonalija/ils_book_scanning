@@ -14,7 +14,6 @@ class InitialSolution:
         beta=0.12,
         grasp_rcl=0.05,
         grasp_max_time=5.0,
-        noisy_restarts=1,
         verbose=True,
     ):
         if hasattr(data, "to_flat_arrays"):
@@ -118,15 +117,6 @@ class InitialSolution:
         )
 
     @staticmethod
-    def generate_initial_solution_grasp(data, rcl_ratio=0.05, max_time=5.0):
-        order, _ = InitialSolution._build_best_grasp_order(data, rcl_ratio, max_time)
-        return Solution.from_order(order, data)
-
-    @staticmethod
-    def generate_initial_sorted(data):
-        return Solution.from_order(InitialSolution._build_order_sorted(data), data)
-
-    @staticmethod
     def _build_order_sorted(data):
         return sorted(
             range(data.num_libs),
@@ -135,95 +125,6 @@ class InitialSolution:
                 -sum(data.scores[book_id] for book_id in data.lib_book_ids[lib_id]),
             ),
         )
-
-    @staticmethod
-    def generate_initial_static_greedy(data, alpha=1.0, capacity_aware=False, rarity_weighted=False):
-        remaining = list(range(data.num_libs))
-        order = []
-        used_books = set()
-        day = 0
-
-        while remaining and day < data.num_days:
-            best_lib = None
-            best_value = None
-            for lib_id in remaining:
-                value = InitialSolution._library_value(
-                    data,
-                    lib_id,
-                    day,
-                    used_books,
-                    alpha=alpha,
-                    capacity_aware=capacity_aware,
-                    rarity_weighted=rarity_weighted,
-                )
-                if best_value is None or value > best_value:
-                    best_value = value
-                    best_lib = lib_id
-
-            if best_lib is None or best_value <= 0:
-                break
-
-            order.append(best_lib)
-            remaining.remove(best_lib)
-            day += data.libs[best_lib].signup_days
-            InitialSolution._mark_greedy_books(data, best_lib, day, used_books)
-
-        order.extend(remaining)
-        return Solution.from_order(order, data)
-
-    @staticmethod
-    def generate_initial_dynamic(data, alpha=1.0):
-        remaining = set(range(data.num_libs))
-        order = []
-        used_books = set()
-        day = 0
-
-        while remaining and day < data.num_days:
-            best_lib = None
-            best_value = None
-            for lib_id in remaining:
-                value = InitialSolution._library_value(
-                    data,
-                    lib_id,
-                    day,
-                    used_books,
-                    alpha=alpha,
-                    capacity_aware=True,
-                    rarity_weighted=True,
-                )
-                if best_value is None or value > best_value:
-                    best_value = value
-                    best_lib = lib_id
-
-            if best_lib is None or best_value <= 0:
-                break
-
-            order.append(best_lib)
-            remaining.remove(best_lib)
-            day += data.libs[best_lib].signup_days
-            InitialSolution._mark_greedy_books(data, best_lib, day, used_books)
-
-        order.extend(sorted(remaining))
-        return Solution.from_order(order, data)
-
-    @staticmethod
-    def generate_initial_greedy_heap(
-        data,
-        alpha=1.0,
-        capacity_aware=False,
-        rarity_weighted=False,
-        noise=0.0,
-        beta=0.0,
-    ):
-        order = InitialSolution._build_order_greedy_heap(
-            data,
-            alpha=alpha,
-            capacity_aware=capacity_aware,
-            rarity_weighted=rarity_weighted,
-            noise=noise,
-            beta=beta,
-        )
-        return Solution.from_order(order, data)
 
     @staticmethod
     def _build_order_greedy_heap(
@@ -530,21 +431,6 @@ class InitialSolution:
 
         order.extend(lib_id for lib_id in range(data.num_libs) if not selected[lib_id])
         return order
-
-    @staticmethod
-    def generate_initial_weighted_efficiency(data, alpha=1.0, beta=0.12):
-        order = InitialSolution._build_order_weighted_efficiency(data, alpha=alpha, beta=beta)
-        return Solution.from_order(order, data)
-
-    @staticmethod
-    def _build_order_weighted_efficiency(data, alpha=1.0, beta=0.12):
-        return InitialSolution._build_order_greedy_heap(
-            data,
-            alpha=alpha,
-            capacity_aware=True,
-            rarity_weighted=False,
-            beta=beta,
-        )
 
     @staticmethod
     def _build_best_grasp_order(data, rcl_ratio=0.05, max_time=5.0):

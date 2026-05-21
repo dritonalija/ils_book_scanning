@@ -170,8 +170,12 @@ In simple terms:
 
 - `Numba` makes the scoring code much faster
 - the final solution rebuild still uses the same scoring logic
-- local search first uses a cheap proxy score, then a fast exact score, and
-  only rebuilds the full solution for moves that truly improve the objective
+- `fast_evaluate` is the exact objective used during search; by default it is a
+  small portfolio that returns the best score among sequential, global, and
+  balanced-global assignment decoders for a fixed library order
+- local search first uses a cheap sequential proxy to screen order moves, then
+  checks surviving moves with `fast_evaluate`, and only rebuilds the full
+  solution for strict exact-objective improvements
 - on small/medium library-count instances, a balanced global assignment mode is
   also considered when scoring and rebuilding a fixed order
 - the pure-Python rebuild fallback evaluates the same sequential, global, and
@@ -183,29 +187,38 @@ In simple terms:
 So `Numba` is a speed improvement, not a change to the objective.
 The `sequential_only` ablation variant disables the global and balanced-global
 assignment modes so the reported score comes only from the official sequential
-library-order assignment.
+library-order assignment. The `no_proxy` ablation keeps the same exact
+objective but removes the cheap proxy screen, forcing local search to evaluate
+candidate order moves directly with `fast_evaluate`.
 
 ## Local Search
 
 Local search is implemented in `models/local_search.py`.
 
-It is a proxy-screened first-improvement hill climber:
+It has two stages:
 
-- start from the current solution
-- sample one tweak operator at a time
-- screen candidate moves with a cheap sequential proxy
-- score proxy-improving, plateau, and near-plateau probes with the exact fast evaluator
-- rebuild and accept only strict exact-fitness improvements
-- stop when time runs out or the no-improvement limit is reached
+1. Proxy-guided exploration.
+   The search samples one tweak operator at a time. Fast order operators build a
+   candidate library order, screen it with a cheap sequential proxy, then verify
+   non-worse proxy moves with the exact `fast_evaluate` objective. Non-order
+   operators that already rebuild a solution are accepted only when the exact
+   solution score improves.
+2. Exact refinement.
+   The remaining local-search time is spent without the proxy. A unified
+   refinement pass samples broader order-neighborhood moves and then
+   deterministically polishes the most important part of the order.
 
-After the randomized phase, an exact batch intensification and a small
-deterministic polish pass are applied if time remains. Their budgets are scaled
-by instance size, and they try:
+The exact refinement tries:
 
 - sampled exact order-neighborhood moves
 - adjacent swaps in the signed prefix
 - short reinsertion moves in the signed prefix
 - boundary swaps between signed and unsigned libraries
+
+This keeps the paper story simple: proxy evaluation is used only as a
+surrogate filter, while every accepted move is validated by the same exact
+decoder used for the exported solution. The final exact tail also reduces the
+risk that a useful solution is missed only because the proxy was imperfect.
 
 ### Tweak operators
 
@@ -541,10 +554,17 @@ python app.py --input-dir input/google_hashcode --output-dir output/google_hashc
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_perturb
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_restart
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_accept
+python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_proxy
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant random_walk
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant sequential_only
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant ls_only
 ```
+
+- `full`: complete solver configuration.
+- `no_proxy`: disables surrogate screening inside local search; useful for the
+  proxy ablation in the paper.
+- `sequential_only`: disables the portfolio decoder and scores only with the
+  sequential assignment rule.
 
 ### Convergence logging
 
@@ -633,7 +653,7 @@ Outputs are written to:
 | `--restart-init-budget-ratio` | `0.3648` via `irace` | Fraction of remaining ILS time allocated to restart initialization |
 | `--seed` | `54` | Random seed |
 | `--quiet` | off | Suppress solver progress logs |
-| `--validate` | off | Run an extra batch validation pass after per-instance validation |
+| `--validate` | off | Print single-output validation, or run an extra batch validation pass after per-instance validation |
 | `--variant` | `full` | Ablation mode |
 | `--log-csv` | None | Output directory for convergence CSVs |
 | `--operator-stats-csv` | None | Single-instance path for local-search operator statistics CSV |
@@ -653,7 +673,6 @@ single-threaded seeded runs.
 | `--alphas` | `0.4 0.5 0.75 1.0 1.5 2.0` via `irace` | Alpha array used by construction heuristics |
 | `--grasp-rcl` | `0.2318` via `irace` | GRASP restricted candidate list ratio |
 | `--grasp-max-time` | `5.0` | Maximum GRASP construction time |
-| `--noisy-restarts` | auto | Number of noisy construction variants from the profile |
 
 Named parameter sets:
 

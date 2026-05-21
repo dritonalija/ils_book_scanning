@@ -227,38 +227,6 @@ class InstanceData:
             return max(sequential_score, global_score, balanced_score)
         return max(sequential_score, global_score)
 
-    def screen_evaluate(self, signed_order):
-        """
-        Cheaper screening score for local search.
-        Uses the global assignment scorer only, which tracks the current exact
-        objective better than the sequential proxy on dense instances while
-        still avoiding the second evaluation pass.
-        """
-        if self.use_sequential_assignment_only():
-            return self.screen_evaluate_sequential(signed_order)
-
-        from models.evaluation import fast_evaluate_global_workspace
-        flat = self.to_flat_arrays()
-        workspace = self.evaluation_workspace()
-        signed_arr = self.order_array_view(signed_order)
-        return int(fast_evaluate_global_workspace(
-            signed_arr,
-            flat['libs_signup'],
-            flat['libs_rate'],
-            flat['lib_num_books'],
-            flat['books_by_score'],
-            flat['book_libs_flat'],
-            flat['book_libs_offsets'],
-            flat['book_libs_lengths'],
-            flat['book_scores'],
-            flat['total_days'],
-            workspace["active"],
-            workspace["remaining_capacity"],
-            workspace["remaining_candidates"],
-            workspace["positions"],
-            workspace["touched_libs"],
-        ))
-
     def screen_evaluate_sequential(self, signed_order):
         """
         Lowest-cost screening score used by local search.
@@ -282,14 +250,3 @@ class InstanceData:
             workspace["touched_books"],
         ))
 
-    def describe(self):
-        print(f"Instance: {self.num_books:,} books, "
-              f"{self.num_libs:,} libs, {self.num_days:,} days")
-
-    def calculate_upper_bound(self):
-        """Sum of scores of all unique books across all libraries."""
-        unique_books = set()
-        for lib in self.libs:
-            for book in lib.books:
-                unique_books.add(book.id)
-        return sum(self.scores[bid] for bid in unique_books)

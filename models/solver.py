@@ -6,6 +6,7 @@ Supported variants for ablation studies:
   - no_perturb   : ILS without perturbation
   - no_restart   : ILS without restarts
   - no_accept    : ILS without acceptance of inferior candidates
+  - no_proxy     : local search uses full exact checks without proxy screening
   - random_walk  : accept every perturbed candidate
   - sequential_only : use only the official sequential assignment scorer
   - ls_only      : single local-search run without the ILS loop
@@ -24,7 +25,7 @@ from models.tweaks import Tweaks
 
 VALID_VARIANTS = {
     'full', 'no_perturb', 'no_restart', 'no_accept',
-    'random_walk', 'sequential_only', 'ls_only',
+    'no_proxy', 'random_walk', 'sequential_only', 'ls_only',
 }
 
 
@@ -46,7 +47,6 @@ class Solver:
         data,
         instance_name=None,
         time_limit=300,
-        max_iterations=None,
         pool_size=None,
         init_max_time=120.0,
         init_budget_ratio=None,
@@ -60,7 +60,6 @@ class Solver:
         weighted_beta=0.12,
         grasp_rcl=0.05,
         grasp_max_time=5.0,
-        noisy_restarts=None,
         local_no_improve_limit=None,
         ls_order_weight=1.0,
         ls_insert_weight=1.0,
@@ -78,14 +77,12 @@ class Solver:
         if variant not in VALID_VARIANTS:
             raise ValueError(
                 f"Unknown variant '{variant}'. Choose from: {VALID_VARIANTS}")
-        # Accepted for backward-compatible CLI/API calls. Local search is
-        # governed by phase time limits and no-improvement limits.
-        _ = max_iterations
         if variant == 'ls_only':
             enable_initial_local_search = True
         previous_assignment_mode = getattr(data, "assignment_mode", "portfolio")
         if variant == 'sequential_only':
             data.assignment_mode = "sequential"
+        use_proxy = variant != 'no_proxy'
 
         sa_final_temperature_ratio = (
             self.SA_FINAL_TEMPERATURE_RATIO
@@ -108,7 +105,6 @@ class Solver:
             profile["perturb_strength_growth"]
             if perturb_strength_growth is None else perturb_strength_growth
         )
-        noisy_restarts = profile["noisy_restarts"] if noisy_restarts is None else noisy_restarts
         local_no_improve_limit = (
             profile["local_no_improve_limit"]
             if local_no_improve_limit is None else local_no_improve_limit
@@ -180,7 +176,6 @@ class Solver:
                 beta=weighted_beta,
                 grasp_rcl=grasp_rcl,
                 grasp_max_time=grasp_max_time,
-                noisy_restarts=noisy_restarts,
                 verbose=self.verbose,
             )
             time_construction = time.time() - t0
@@ -211,6 +206,7 @@ class Solver:
                     no_improve_limit=local_no_improve_limit,
                     tweak_weights=tweak_weights,
                     operator_stats=operator_stats,
+                    use_proxy=use_proxy,
                 )
                 time_local_search += time.time() - t0
 
@@ -277,6 +273,7 @@ class Solver:
                     no_improve_limit=local_no_improve_limit,
                     tweak_weights=tweak_weights,
                     operator_stats=operator_stats,
+                    use_proxy=use_proxy,
                 )
                 time_local_search += time.time() - t0
 
@@ -368,7 +365,6 @@ class Solver:
                         weighted_beta=weighted_beta,
                         grasp_rcl=grasp_rcl,
                         grasp_max_time=min(grasp_max_time, restart_init_budget * 0.5),
-                        noisy_restarts=noisy_restarts,
                         init_max_time=restart_init_budget,
                     )
                     restart_count += 1
@@ -384,6 +380,7 @@ class Solver:
                             local_no_improve_limit // 2),
                         tweak_weights=tweak_weights,
                         operator_stats=operator_stats,
+                        use_proxy=use_proxy,
                     )
                     time_local_search += time.time() - t0
 
@@ -678,7 +675,7 @@ class Solver:
     def _restart_state(
         self, candidate_pool, home_pool, data, profile,
         restart_fresh_probability, alpha_values, weighted_beta,
-        grasp_rcl, grasp_max_time, noisy_restarts, init_max_time=None,
+        grasp_rcl, grasp_max_time, init_max_time=None,
     ):
         budget = init_max_time or profile["restart_init_max_time"]
         if random.random() < restart_fresh_probability:
@@ -696,7 +693,6 @@ class Solver:
                 beta=weighted_beta,
                 grasp_rcl=grasp_rcl,
                 grasp_max_time=min(grasp_max_time, budget),
-                noisy_restarts=noisy_restarts,
                 verbose=False,
             )
             return "fresh_init", fresh_solution
@@ -735,7 +731,6 @@ class Solver:
                 "restart_threshold": 3,
                 "perturb_strength_base": 8,
                 "perturb_strength_growth": 3,
-                "noisy_restarts": 0,
                 "local_no_improve_limit": 120,
                 "initial_ls_time": 1.1,
                 "round_ls_time": 0.5,
@@ -761,7 +756,6 @@ class Solver:
                 "restart_threshold": 4,
                 "perturb_strength_base": 6,
                 "perturb_strength_growth": 2,
-                "noisy_restarts": 1,
                 "local_no_improve_limit": 220,
                 "initial_ls_time": 1.8,
                 "round_ls_time": 0.9,
@@ -784,7 +778,6 @@ class Solver:
                 "restart_threshold": 5,
                 "perturb_strength_base": 4,
                 "perturb_strength_growth": 2,
-                "noisy_restarts": 2,
                 "local_no_improve_limit": 320,
                 "initial_ls_time": 2.6,
                 "round_ls_time": 1.3,
@@ -802,7 +795,6 @@ class Solver:
             "restart_threshold": 6,
             "perturb_strength_base": 3,
             "perturb_strength_growth": 1,
-            "noisy_restarts": 3,
             "local_no_improve_limit": 320,
             "initial_ls_time": 3.2,
             "round_ls_time": 1.6,

@@ -37,6 +37,8 @@ INT_PARAMS = {
     'perturb_strength_growth',
     'local_no_improve_limit',
 }
+CAT_PARAMS = {'alpha_pool'}
+KNOWN_PARAMS = FLOAT_PARAMS | INT_PARAMS | CAT_PARAMS
 
 
 def parse_irace_arguments(argv):
@@ -78,13 +80,20 @@ def build_solver_kwargs(instance_path, time_limit, params):
         'restart_init_budget_ratio': DEFAULT_RESTART_INIT_BUDGET_RATIO,
     }
 
+    unknown = sorted(set(params) - KNOWN_PARAMS)
+    if unknown:
+        raise ValueError(f"Unknown iRace parameter(s): {', '.join(unknown)}")
+
     for key, value in params.items():
         if key in FLOAT_PARAMS:
             kwargs[key] = float(value)
         elif key in INT_PARAMS:
             kwargs[key] = int(value)
         elif key == 'alpha_pool':
-            kwargs['alpha_values'] = ALPHA_POOLS[value]
+            pool_name = value.strip("\"'")
+            if pool_name not in ALPHA_POOLS:
+                raise ValueError(f"Unknown alpha_pool '{value}'")
+            kwargs['alpha_values'] = ALPHA_POOLS[pool_name]
 
     return kwargs
 

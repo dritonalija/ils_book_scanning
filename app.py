@@ -158,7 +158,6 @@ def run_instance(args, input_path, output_path):
         weighted_beta=args.weighted_beta,
         grasp_rcl=args.grasp_rcl,
         grasp_max_time=args.grasp_max_time,
-        noisy_restarts=args.noisy_restarts,
         local_no_improve_limit=args.local_no_improve_limit,
         ls_order_weight=args.ls_order_weight,
         ls_insert_weight=args.ls_insert_weight,
@@ -204,12 +203,6 @@ def build_argument_parser():
                         help="Optional cap for initial construction as a fraction of ILS time")
     parser.add_argument("--restart-init-budget-ratio", type=float, default=0.30,
                         help="Fraction of remaining ILS time allowed for fresh restart construction")
-    parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=None,
-        help="Deprecated no-op compatibility flag; search is time/stagnation driven",
-    )
     parser.add_argument("--pool-size", type=int, default=None)
     parser.add_argument("--restart-threshold", type=int, default=None)
     parser.add_argument("--perturb-strength-base", type=int, default=None)
@@ -224,7 +217,6 @@ def build_argument_parser():
     parser.add_argument("--weighted-beta", type=float, default=0.12)
     parser.add_argument("--grasp-rcl", type=float, default=0.05)
     parser.add_argument("--grasp-max-time", type=float, default=5.0)
-    parser.add_argument("--noisy-restarts", type=int, default=None)
     parser.add_argument("--local-no-improve-limit", type=int, default=None)
     parser.add_argument("--ls-order-weight", type=float, default=1.0)
     parser.add_argument("--ls-insert-weight", type=float, default=1.0)
@@ -300,9 +292,13 @@ def main():
     if args.operator_stats_csv and args.operator_stats_dir:
         parser.error("--operator-stats-csv and --operator-stats-dir are mutually exclusive")
 
+    single_input_path = None
+    single_output_path = None
     if args.input:
         output_path = args.output or os.path.join(
             args.output_dir, os.path.basename(args.input))
+        single_input_path = args.input
+        single_output_path = output_path
         result = run_instance(args, args.input, output_path)
         print(f"Final score for {os.path.basename(args.input)}: "
               f"{result.fitness_score:,}")
@@ -372,10 +368,18 @@ def main():
         print(f"{'=' * 70}")
 
     if args.validate:
-        from validator.multiple_validator import validate_all_solutions
-        print("\nValidating all solutions...")
-        validate_all_solutions(
-            input_dir=args.input_dir, output_dir=args.output_dir)
+        if single_input_path:
+            verdict = validate_solution(
+                single_input_path,
+                single_output_path,
+                isConsoleApplication=True,
+            )
+            print(f"\nValidation for {os.path.basename(single_output_path)}: {verdict}")
+        else:
+            from validator.multiple_validator import validate_all_solutions
+            print("\nValidating all solutions...")
+            validate_all_solutions(
+                input_dir=args.input_dir, output_dir=args.output_dir)
 
 
 if __name__ == "__main__":

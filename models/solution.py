@@ -63,10 +63,6 @@ class Solution:
                 f.write(f"{library} {len(books)}\n")
                 f.write(" ".join(map(str, books)) + "\n")
 
-    def calculate_fitness_score(self, scores):
-        self.fitness_score = sum(scores[book] for book in self.scanned_books)
-        return self.fitness_score
-
     def rebuild_from_order(self, order, data):
         flat = data.to_flat_arrays() if hasattr(data, "to_flat_arrays") else None
         if flat is not None:

@@ -80,17 +80,6 @@ class Tweaks:
         ]
 
     @staticmethod
-    def choose_tweak_method(weights=None):
-        weights = weights or Tweaks.DEFAULT_WEIGHTS
-        methods = Tweaks.get_tweak_methods()
-        labels = [label for label, _ in methods]
-        funcs = [func for _, func in methods]
-        probs = [weights.get(label, 0.0) for label in labels]
-        if sum(probs) <= 0:
-            raise ValueError("At least one local-search operator weight must be positive")
-        return random.choices(funcs, weights=probs, k=1)[0]
-
-    @staticmethod
     def grouped_weights(order_scale=1.0, insert_scale=1.0, strategic_scale=1.0):
         scales = {
             "order": order_scale,
