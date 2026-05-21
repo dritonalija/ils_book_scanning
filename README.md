@@ -373,7 +373,7 @@ then added to the iRace test set so elite selection also accounts for them.
 The iRace scenarios keep progressive instance sampling enabled
 (`sampleInstances = 1`) and evaluate the top `5` elites on the hold-out split
 (`testNbElites = 5`). They also run up to `6` target-runner jobs in parallel
-(`targetRunnerParallel = 6`).
+(`parallel = 6`).
 
 ### What each iRace file does
 
@@ -383,7 +383,7 @@ The iRace scenarios keep progressive instance sampling enabled
 - `instances.txt`: training instances used during tuning
 - `instances-test.txt`: hold-out instances used by iRace for elite testing
 - `target-runner.sh`: shell entry point called by iRace
-- `targetRunnerParallel = 6`: parallel target-runner jobs used by each scenario
+- `parallel = 6`: parallel target-runner jobs used by each scenario
 - `irace_runner.py`: Python adapter that receives candidate parameters from
   iRace, runs the solver on one instance, and prints a single cost value back
   to iRace

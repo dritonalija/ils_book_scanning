@@ -5,6 +5,6 @@ seed = 54
 sampleInstances = 1
 testNbElites = 5
 targetRunner = "./target-runner.sh"
-targetRunnerParallel = 6
+parallel = 6
 maxExperiments = 320
 logFile = "irace_output/irace-test.Rdata"
