@@ -31,6 +31,7 @@ perturbation, and multi-start restarts after prolonged stagnation.
     - [Perturbation types](#perturbation-types)
   - [Restart Strategy](#restart-strategy)
   - [Instance Profiles](#instance-profiles)
+  - [Experimental Protocol](#experimental-protocol)
   - [CLI Usage](#cli-usage)
     - [Single instance](#single-instance)
     - [Batch mode](#batch-mode)
@@ -215,10 +216,10 @@ The exact refinement tries:
 - short reinsertion moves in the signed prefix
 - boundary swaps between signed and unsigned libraries
 
-This keeps the paper story simple: proxy evaluation is used only as a
-surrogate filter, while every accepted move is validated by the same exact
-decoder used for the exported solution. The final exact tail also reduces the
-risk that a useful solution is missed only because the proxy was imperfect.
+Proxy evaluation is used only as a surrogate filter, while every accepted move
+is validated by the same exact decoder used for the exported solution. The
+final exact tail also reduces the risk that a useful solution is missed only
+because the proxy was imperfect.
 
 ### Tweak operators
 
@@ -334,8 +335,21 @@ The final tuning surface contains `14` parameters:
 - local-search stagnation limit
 - the three grouped local-search operator weights
 
-The full tuning scenario uses `maxExperiments = 1500`, while
+The full tuning scenario uses `maxExperiments = 5000`, while
 `scenario-test.txt` provides a reduced `320`-experiment configuration.
+
+Both scenarios set `seed = 54` for reproducible tuning, matching the solver's
+default CLI seed. The target runner
+uses `300s` for ILS and an initial construction cap of `120s` by default.
+The final experimental evaluation uses `600s` for ILS; after tuning, transfer
+check the elite configuration at `600s` on a small validation subset before
+running final hold-out experiments. For short pilot tuning runs, override the
+defaults with environment variables:
+
+```bash
+IRACE_TIME_LIMIT=120 IRACE_INIT_BUDGET_CAP=30 \
+  Rscript -e "library(irace); irace(scenario=readScenario('scenario-test.txt'))"
+```
 
 Both iRace scenarios use `trainInstancesFile` and `testInstancesFile`.
 `instances.txt` contains the deterministic training split, and
@@ -358,18 +372,18 @@ then added to the iRace test set so elite selection also accounts for them.
 
 The iRace scenarios keep progressive instance sampling enabled
 (`sampleInstances = 1`) and evaluate the top `5` elites on the hold-out split
-(`testNbElites = 5`). They also run up to `4` target-runner jobs in parallel
-(`targetRunnerParallel = 4`).
+(`testNbElites = 5`). They also run up to `6` target-runner jobs in parallel
+(`targetRunnerParallel = 6`).
 
 ### What each iRace file does
 
 - `parameters.txt`: declares the parameter search space for iRace
-- `scenario.txt`: main iRace run with the full `1500`-experiment budget
+- `scenario.txt`: main iRace run with the full `5000`-experiment budget
 - `scenario-test.txt`: smaller iRace run with a `320`-experiment budget
 - `instances.txt`: training instances used during tuning
 - `instances-test.txt`: hold-out instances used by iRace for elite testing
 - `target-runner.sh`: shell entry point called by iRace
-- `targetRunnerParallel = 4`: parallel target-runner jobs used by each scenario
+- `targetRunnerParallel = 6`: parallel target-runner jobs used by each scenario
 - `irace_runner.py`: Python adapter that receives candidate parameters from
   iRace, runs the solver on one instance, and prints a single cost value back
   to iRace
@@ -524,6 +538,147 @@ These profiles set defaults for:
 This keeps the strategy mostly dependent on instance size rather than on a
 single fixed parameter set.
 
+## Experimental Protocol
+
+For controlled batch experiments, prefer the dedicated runner over launching
+many manual `app.py` commands. The runner is parallel, resumable, validates
+every exported solution, and stores experiment metadata in one CSV.
+
+Full run:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --algorithm ILS_iRace \
+  --param-set irace \
+  --variants full \
+  --time-limit 600 \
+  --init-max-time 120 \
+  --runs-per-instance 10 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/experiments \
+  --convergence-instances-file diverse_instances.txt \
+  --convergence-seeds 1
+```
+
+This gives the ILS improvement phase `10` minutes per run:
+
+- initial construction is capped at `120s` and usually finishes earlier
+- the ILS improvement loop then receives `600s`
+- `10` seeds spread across `1..100`:
+  `1, 12, 23, 34, 45, 56, 67, 78, 89, 100`
+
+The total wall-clock time per run is therefore:
+
+```text
+actual construction time + 600s ILS
+```
+
+Unless `--results-csv` is provided explicitly, the runner writes raw per-run
+results to `<output-dir>/experiment_results.csv`.
+
+Use `--total-time-limit` only if the comparison protocol requires a strict
+wall-clock cap that includes construction.
+
+Use `--workers` for parallelism. Set the worker count according to available
+CPU, memory, and I/O capacity. A good starting point on a machine with enough
+headroom is `--workers 6`; reduce it if memory pressure, swap usage, or high
+load averages appear.
+Avoid running several large experiment sessions at once; it is cleaner to let
+one runner manage the queue and resume state.
+
+The full command checklist for tuning, evaluation, ablation, convergence, and
+statistical analysis is available in `docs/experiments.md`.
+
+Before the full run, do a pilot:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --limit-instances 20 \
+  --time-limit 120 \
+  --init-max-time 30 \
+  --runs-per-instance 2 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/pilot \
+  --convergence-instances-file diverse_instances.txt \
+  --convergence-seeds 1
+```
+
+For component analysis, run the built-in ablations:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --algorithm ILS_iRace \
+  --param-set irace \
+  --variants full \
+  --component-variants \
+  --time-limit 600 \
+  --init-max-time 120 \
+  --runs-per-instance 10 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/component_ablation
+```
+
+For operator-level ablation, use a smaller pilot first because this multiplies
+the experiment count by the number of operators:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --limit-instances 30 \
+  --algorithm ILS_iRace \
+  --param-set irace \
+  --variants full \
+  --operator-ablations all \
+  --time-limit 600 \
+  --init-max-time 120 \
+  --runs-per-instance 5 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/operator_ablation_pilot
+```
+
+After collecting results, summarize them and run Wilcoxon signed-rank tests:
+
+```bash
+python analyze_results.py \
+  --results-csv output/experiments/experiment_results.csv results/other_algorithms.csv \
+  --reference-method ILS_iRace:full \
+  --paired-metric mean \
+  --wilcoxon-alternative greater \
+  --output-dir results/analysis
+```
+
+The analysis writes:
+
+- `per_instance_summary.csv`: per-instance mean/best/median scores, average
+  gap-to-bound, and ratios against the reference and best method
+- `method_summary.csv`: dataset and overall summaries including scale-free
+  metrics such as mean gap-to-bound and mean ratio to the per-instance best
+- `wilcoxon_tests.csv`: paired Wilcoxon tests with raw p-values plus
+  Holm-Bonferroni and Benjamini-Hochberg corrections
+- `friedman_tests.csv`: omnibus Friedman tests and average ranks for
+  multi-method comparisons
+
+Plot convergence curves for the diverse instance set:
+
+```bash
+python plot_convergence.py \
+  --log-root logs/convergence \
+  --instances-file diverse_instances.txt \
+  --output-dir results/plots/convergence
+```
+
+If iRace is rerun, tune only on `instances.txt`, choose the final parameter
+set, update `parameter_sets.py`, commit that version, and then run the final
+hold-out experiments on `instances-test.txt`. Do not use hold-out results to
+retune the solver.
+
 ## CLI Usage
 
 ### Single instance
@@ -563,7 +718,7 @@ python app.py --input-dir input/google_hashcode --output-dir output/google_hashc
 
 - `full`: complete solver configuration.
 - `no_proxy`: disables surrogate screening inside local search; useful for the
-  proxy ablation in the paper.
+  proxy ablation.
 - `no_structured`: disables the conditional uniform/paired-instance operators;
   useful for showing how much they contribute on structured uniform instances.
 - `sequential_only`: disables the portfolio decoder and scores only with the
@@ -784,7 +939,14 @@ Install the Python dependencies with:
 pip install -r requirements.txt
 ```
 
-`numba` is optional but strongly recommended for larger experimental runs.
+After installing the dependencies on the execution environment, freeze the exact
+environment if an immutable experiment record is needed:
+
+```bash
+pip freeze > requirements-lock.txt
+```
+
+`numba` is strongly recommended for larger experimental runs.
 
 ## References
 

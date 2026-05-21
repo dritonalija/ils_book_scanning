@@ -5,6 +5,12 @@ iRace target runner adapter.
 Called by iRace via target-runner.sh with positional arguments:
   <candidate_id> <instance_id> <seed> <instance_path> [boundMax] --param1 val1 ...
 
+By default, each candidate receives a tuning budget of 300 seconds for ILS and
+up to 120 seconds for initial construction. Final evaluation uses 600 seconds
+for ILS; the tuned elite should be transfer-checked at that budget before final
+reporting. Override with IRACE_TIME_LIMIT and IRACE_INIT_BUDGET_CAP for pilot
+or exact-budget tuning runs.
+
 Prints a single negative score to stdout (iRace minimises).
 All solver output is suppressed.
 """
@@ -15,9 +21,9 @@ import sys
 
 from parameter_sets import ALPHA_POOLS
 
-DEFAULT_IRACE_TIME_LIMIT = 60.0
+DEFAULT_IRACE_TIME_LIMIT = float(os.environ.get('IRACE_TIME_LIMIT', '300.0'))
 DEFAULT_INIT_BUDGET_RATIO = 0.30
-DEFAULT_INIT_BUDGET_CAP = 30.0
+DEFAULT_INIT_BUDGET_CAP = float(os.environ.get('IRACE_INIT_BUDGET_CAP', '120.0'))
 DEFAULT_RESTART_INIT_BUDGET_RATIO = 0.30
 
 FLOAT_PARAMS = {
