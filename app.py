@@ -8,6 +8,7 @@ import time
 
 from models import Parser
 from models import Solver
+from models import Solution
 from models.tweaks import Tweaks
 from models.solver import VALID_VARIANTS
 from parameter_sets import (
@@ -27,31 +28,44 @@ def compute_improvement(initial, final):
     return ((final - initial) / initial * 100) if initial > 0 else 0.0
 
 
+def compute_gap_to_bound(score, upper_bound):
+    return ((upper_bound - score) / upper_bound * 100) if upper_bound > 0 else 0.0
+
+
 def write_summary_header(csv_writer):
     csv_writer.writerow([
         "instance",
         "initial_score",
         "final_score",
+        "upper_bound",
+        "gap_to_bound_pct",
         "elapsed_s",
         "running_elapsed_s",
         "improvement_pct",
         "running_total_initial",
         "running_total_final",
+        "running_total_upper_bound",
+        "running_total_gap_to_bound_pct",
         "running_total_improvement_pct",
     ])
 
 
 def append_summary_row(csv_writer, file_name, elapsed_s, running_elapsed_s,
-                       initial, final, total_initial, total_final):
+                       initial, final, upper_bound,
+                       total_initial, total_final, total_upper_bound):
     csv_writer.writerow([
         file_name,
         initial,
         final,
+        upper_bound,
+        f"{compute_gap_to_bound(final, upper_bound):.6f}",
         f"{elapsed_s:.6f}",
         f"{running_elapsed_s:.6f}",
         f"{compute_improvement(initial, final):.6f}",
         total_initial,
         total_final,
+        total_upper_bound,
+        f"{compute_gap_to_bound(total_final, total_upper_bound):.6f}",
         f"{compute_improvement(total_initial, total_final):.6f}",
     ])
 
@@ -114,6 +128,47 @@ def validated_output_score(input_path, output_path):
     return total_score
 
 
+def load_seed_solution(input_path, seed_solution_path, data):
+    verdict = validate_solution(
+        input_path,
+        seed_solution_path,
+        isConsoleApplication=True,
+    )
+    if verdict != "Valid":
+        details = validate_solution(input_path, seed_solution_path)
+        raise ValueError(
+            f"Seed solution is invalid ({os.path.basename(seed_solution_path)}):\n"
+            f"{details}"
+        )
+
+    _num_libraries, solution_entries = read_output_file(seed_solution_path)
+    signed_order = [lib_id for lib_id, _num_books, _books in solution_entries]
+    signed_set = set(signed_order)
+    scanned_books_per_library = {}
+    scanned_books = set()
+    total_score = 0
+    for lib_id, _num_books, books in solution_entries:
+        scanned_books_per_library[lib_id] = list(books)
+        for book_id in books:
+            if book_id in scanned_books:
+                continue
+            scanned_books.add(book_id)
+            total_score += data.scores[book_id]
+
+    unsigned_order = [
+        lib_id
+        for lib_id in range(data.num_libs)
+        if lib_id not in signed_set
+    ]
+    return Solution(
+        signed_libs=signed_order,
+        unsigned_libs=unsigned_order,
+        scanned_books_per_library=scanned_books_per_library,
+        scanned_books=scanned_books,
+        fitness_score=total_score,
+    )
+
+
 def run_instance(args, input_path, output_path):
     parser = Parser(input_path)
     data = parser.parse()
@@ -141,6 +196,12 @@ def run_instance(args, input_path, output_path):
         log_stem = os.path.splitext(instance_name)[0]
         log_csv = os.path.join(args.log_csv, f"{log_stem}.csv")
 
+    seed_solution = None
+    seed_label = "initial"
+    if args.seed_solution:
+        seed_solution = load_seed_solution(input_path, args.seed_solution, data)
+        seed_label = f"seed:{os.path.basename(args.seed_solution)}"
+
     result = solver.iterated_local_search(
         data,
         instance_name=instance_name,
@@ -158,6 +219,8 @@ def run_instance(args, input_path, output_path):
         weighted_beta=args.weighted_beta,
         grasp_rcl=args.grasp_rcl,
         grasp_max_time=args.grasp_max_time,
+        seed_solution=seed_solution,
+        seed_label=seed_label,
         local_no_improve_limit=args.local_no_improve_limit,
         ls_order_weight=args.ls_order_weight,
         ls_insert_weight=args.ls_insert_weight,
@@ -178,6 +241,7 @@ def run_instance(args, input_path, output_path):
             f"Score mismatch for {instance_name}: "
             f"solver={result.fitness_score}, validator={validator_score}"
         )
+    result.upper_bound = data.calculate_upper_bound()
     return result
 
 
@@ -217,6 +281,12 @@ def build_argument_parser():
     parser.add_argument("--weighted-beta", type=float, default=0.12)
     parser.add_argument("--grasp-rcl", type=float, default=0.05)
     parser.add_argument("--grasp-max-time", type=float, default=5.0)
+    parser.add_argument(
+        "--seed-solution",
+        type=str,
+        default=None,
+        help="Existing solution file used as the starting point before ILS",
+    )
     parser.add_argument("--local-no-improve-limit", type=int, default=None)
     parser.add_argument("--ls-order-weight", type=float, default=1.0)
     parser.add_argument("--ls-insert-weight", type=float, default=1.0)
@@ -291,6 +361,8 @@ def main():
         parser.error("--operator-stats-csv can only be used with a single input instance")
     if args.operator_stats_csv and args.operator_stats_dir:
         parser.error("--operator-stats-csv and --operator-stats-dir are mutually exclusive")
+    if args.seed_solution and not args.input:
+        parser.error("--seed-solution can only be used with a single input instance")
 
     single_input_path = None
     single_output_path = None
@@ -302,11 +374,15 @@ def main():
         result = run_instance(args, args.input, output_path)
         print(f"Final score for {os.path.basename(args.input)}: "
               f"{result.fitness_score:,}")
+        if result.upper_bound > 0:
+            print(f"Gap to naive upper bound: "
+                  f"{compute_gap_to_bound(result.fitness_score, result.upper_bound):.2f}%")
     else:
         os.makedirs(args.output_dir, exist_ok=True)
         results = []
         total_initial = 0
         total_final = 0
+        total_upper_bound = 0
         running_elapsed = 0.0
         summary_file = None
         summary_writer = None
@@ -329,9 +405,15 @@ def main():
                 instance_start = time.time()
                 result = run_instance(args, input_path, output_path)
                 elapsed_s = time.time() - instance_start
-                results.append((file, result.initial_score, result.fitness_score))
+                results.append((
+                    file,
+                    result.initial_score,
+                    result.fitness_score,
+                    result.upper_bound,
+                ))
                 total_initial += result.initial_score
                 total_final += result.fitness_score
+                total_upper_bound += result.upper_bound
                 running_elapsed += elapsed_s
                 if summary_writer:
                     append_summary_row(
@@ -341,8 +423,10 @@ def main():
                         running_elapsed,
                         result.initial_score,
                         result.fitness_score,
+                        result.upper_bound,
                         total_initial,
                         total_final,
+                        total_upper_bound,
                     )
                     summary_file.flush()
                 print(f"Final score for {file}: {result.fitness_score:,}")
@@ -355,15 +439,17 @@ def main():
         print(f"\n{'=' * 70}")
         print(f"  Summary (variant={args.variant}, param_set={args.param_set})")
         print(f"{'=' * 70}")
-        print(f"{'Instance':<35} {'Initial':>12} {'Final':>12} {'Improv%':>10}")
+        print(f"{'Instance':<35} {'Initial':>12} {'Final':>12} {'Gap%':>8} {'Improv%':>10}")
         print(f"{'-' * 70}")
-        for file, initial, final in results:
+        for file, initial, final, upper_bound in results:
             improvement = compute_improvement(initial, final)
-            print(f"{file:<35} {initial:>12,} {final:>12,} "
+            gap = compute_gap_to_bound(final, upper_bound)
+            print(f"{file:<35} {initial:>12,} {final:>12,} {gap:>7.2f}% "
                   f"{improvement:>+9.2f}%")
         print(f"{'-' * 70}")
         total_imp = compute_improvement(total_initial, total_final)
-        print(f"{'TOTAL':<35} {total_initial:>12,} {total_final:>12,} "
+        total_gap = compute_gap_to_bound(total_final, total_upper_bound)
+        print(f"{'TOTAL':<35} {total_initial:>12,} {total_final:>12,} {total_gap:>7.2f}% "
               f"{total_imp:>+9.2f}%")
         print(f"{'=' * 70}")
 

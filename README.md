@@ -275,12 +275,12 @@ For manual experiments, the CLI also exposes per-operator overrides through
 individually; it tunes only the three grouped multipliers to keep the search
 space compact and interpretable.
 
-Two strategic operators are instance-class-conditional rather than always
-active. `coverage_exchange` applies a maximum-coverage exchange only when the
-input has uniform score/signup/rate structure. `paired_choice_flip` is enabled
-only when that uniform instance also matches a paired binary-choice structure.
-Benchmark tables should identify these as conditional operators, with optional
-uniform-instance ablations produced by setting their weights to zero.
+Two strategic operators are instance-class-conditional. `coverage_exchange`
+applies a maximum-coverage exchange only when the input has uniform
+score/signup/rate structure. `paired_choice_flip` is enabled only when that
+uniform instance also matches a paired binary-choice structure. They are part
+of the full solver for uniform structured instances, while the `no_structured`
+variant disables them for the general-neighborhood ablation.
 
 ## Batch Runs And Summaries
 
@@ -317,7 +317,7 @@ Useful outputs:
   `<output-dir>/batch_summary_<input-folder>.csv`, with the columns:
 
 ```text
-instance, initial_score, final_score, elapsed_s, running_elapsed_s, improvement_pct, running_total_initial, running_total_final, running_total_improvement_pct
+instance, initial_score, final_score, upper_bound, gap_to_bound_pct, elapsed_s, running_elapsed_s, improvement_pct, running_total_initial, running_total_final, running_total_upper_bound, running_total_gap_to_bound_pct, running_total_improvement_pct
 ```
 
 ## iRace Tuning
@@ -555,6 +555,7 @@ python app.py --input-dir input/google_hashcode --output-dir output/google_hashc
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_restart
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_accept
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_proxy
+python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_structured
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant random_walk
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant sequential_only
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant ls_only
@@ -563,6 +564,8 @@ python app.py --input-dir input/google_hashcode --output-dir output/google_hashc
 - `full`: complete solver configuration.
 - `no_proxy`: disables surrogate screening inside local search; useful for the
   proxy ablation in the paper.
+- `no_structured`: disables the conditional uniform/paired-instance operators;
+  useful for showing how much they contribute on structured uniform instances.
 - `sequential_only`: disables the portfolio decoder and scores only with the
   sequential assignment rule.
 
@@ -651,6 +654,7 @@ Outputs are written to:
 | `--init-max-time` | `120` | Initial construction budget in seconds |
 | `--init-budget-ratio` | None | Optional cap for initial construction as a fraction of ILS time |
 | `--restart-init-budget-ratio` | `0.3648` via `irace` | Fraction of remaining ILS time allocated to restart initialization |
+| `--seed-solution` | None | Existing solution file used as the starting point before ILS; single-instance mode only |
 | `--seed` | `54` | Random seed |
 | `--quiet` | off | Suppress solver progress logs |
 | `--validate` | off | Print single-output validation, or run an extra batch validation pass after per-instance validation |

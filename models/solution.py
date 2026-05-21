@@ -4,7 +4,7 @@ import numpy as np
 class Solution:
     __slots__ = ('signed_libraries', 'unsigned_libraries',
                  'scanned_books_per_library', 'scanned_books',
-                 'fitness_score', 'initial_score')
+                 'fitness_score', 'initial_score', 'upper_bound')
 
     def __init__(
         self,
@@ -20,6 +20,7 @@ class Solution:
         self.scanned_books = scanned_books or set()
         self.fitness_score = fitness_score
         self.initial_score = 0
+        self.upper_bound = 0
 
     @classmethod
     def from_order(cls, order, data):
@@ -36,6 +37,7 @@ class Solution:
             self.fitness_score,
         )
         s.initial_score = self.initial_score
+        s.upper_bound = self.upper_bound
         return s
 
     def ordered_libraries(self):

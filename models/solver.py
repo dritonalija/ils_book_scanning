@@ -7,6 +7,7 @@ Supported variants for ablation studies:
   - no_restart   : ILS without restarts
   - no_accept    : ILS without acceptance of inferior candidates
   - no_proxy     : local search uses full exact checks without proxy screening
+  - no_structured: disable conditional structured-instance operators
   - random_walk  : accept every perturbed candidate
   - sequential_only : use only the official sequential assignment scorer
   - ls_only      : single local-search run without the ILS loop
@@ -25,7 +26,7 @@ from models.tweaks import Tweaks
 
 VALID_VARIANTS = {
     'full', 'no_perturb', 'no_restart', 'no_accept',
-    'no_proxy', 'random_walk', 'sequential_only', 'ls_only',
+    'no_proxy', 'no_structured', 'random_walk', 'sequential_only', 'ls_only',
 }
 
 
@@ -60,6 +61,8 @@ class Solver:
         weighted_beta=0.12,
         grasp_rcl=0.05,
         grasp_max_time=5.0,
+        seed_solution=None,
+        seed_label="seed_solution",
         local_no_improve_limit=None,
         ls_order_weight=1.0,
         ls_insert_weight=1.0,
@@ -123,6 +126,9 @@ class Solver:
             overrides=operator_weights,
             enabled=selected_operators,
         )
+        if variant == 'no_structured':
+            tweak_weights["coverage_exchange"] = 0.0
+            tweak_weights["paired_choice_flip"] = 0.0
         if sum(tweak_weights.values()) <= 0:
             raise ValueError("At least one enabled local-search operator must have positive weight")
 
@@ -169,26 +175,37 @@ class Solver:
             # Phase 1: Initial solution construction
             # =============================================
             t0 = time.time()
-            initial_solution, candidate_pool = InitialSolution.generate_initial_solution(
-                data,
-                max_time=initial_budget,
-                alphas=alpha_values,
-                beta=weighted_beta,
-                grasp_rcl=grasp_rcl,
-                grasp_max_time=grasp_max_time,
-                verbose=self.verbose,
-            )
+            if seed_solution is not None:
+                initial_solution = seed_solution.clone()
+                candidate_pool = [
+                    (initial_solution.fitness_score, seed_label, initial_solution.clone())
+                ]
+                if self.verbose:
+                    print(
+                        f"Using seed solution: {seed_label} | "
+                        f"Score: {initial_solution.fitness_score:,}"
+                    )
+            else:
+                initial_solution, candidate_pool = InitialSolution.generate_initial_solution(
+                    data,
+                    max_time=initial_budget,
+                    alphas=alpha_values,
+                    beta=weighted_beta,
+                    grasp_rcl=grasp_rcl,
+                    grasp_max_time=grasp_max_time,
+                    verbose=self.verbose,
+                )
             time_construction = time.time() - t0
             initial_score = initial_solution.fitness_score
 
             best_solution = initial_solution.clone()
             home_base = initial_solution.clone()
-            best_label = "initial"
+            best_label = seed_label if seed_solution is not None else "initial"
 
             if csv_writer:
                 csv_writer.writerow([
                     time.time(), time_construction, 'construction', 0,
-                    initial_score, initial_score, 'initial_solution'])
+                    initial_score, initial_score, best_label])
 
             # =============================================
             # Phase 2: Optional initial local search

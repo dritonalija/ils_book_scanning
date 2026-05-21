@@ -250,3 +250,14 @@ class InstanceData:
             workspace["touched_books"],
         ))
 
+    def calculate_upper_bound(self):
+        """Naive upper bound: score of every distinct book available in libraries."""
+        seen = bytearray(self.num_books)
+        upper_bound = 0
+        for book_ids in self.lib_book_ids:
+            for book_id in book_ids:
+                if not seen[book_id]:
+                    seen[book_id] = 1
+                    upper_bound += self.scores[book_id]
+        return upper_bound
+

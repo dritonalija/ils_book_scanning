@@ -20,7 +20,9 @@ class Tweaks:
 
     DEFAULT_WEIGHTS = {
         # Base weights calibrated from operator-isolation experiments.
-        # Newer strategic operators use conservative weights until retuned.
+        # Structured-instance operators are conditional: they receive weight in
+        # the full solver, but `instance_adjusted_weights` activates them only
+        # when the input structure matches their assumptions.
         "remove_library": 2.8,
         "move_signed": 2.4,
         "swap_signed": 2.2,

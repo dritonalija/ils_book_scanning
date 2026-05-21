@@ -14,6 +14,10 @@ class LocalSearch:
     EXACT_REFINEMENT_MIN_SHARE = 0.15
 
     @staticmethod
+    def _unsigned_frontier_size(signed_count, unsigned_count):
+        return min(unsigned_count, max(64, 4 * LocalSearch._frontier_size(signed_count)))
+
+    @staticmethod
     def _screen_score(data, order):
         return data.screen_evaluate_sequential(order)
 
@@ -231,7 +235,11 @@ class LocalSearch:
 
         if move < 0.40 and unsigned_count > 0:
             signed_idx = random.randrange(signed_count)
-            unsigned_idx = signed_count + random.randrange(unsigned_count)
+            unsigned_frontier = LocalSearch._unsigned_frontier_size(
+                signed_count,
+                unsigned_count,
+            )
+            unsigned_idx = signed_count + random.randrange(unsigned_frontier)
             order[signed_idx], order[unsigned_idx] = order[unsigned_idx], order[signed_idx]
             return order
 
@@ -247,7 +255,11 @@ class LocalSearch:
             return order
 
         if move < 0.82 and unsigned_count > 0:
-            unsigned_idx = signed_count + random.randrange(unsigned_count)
+            unsigned_frontier = LocalSearch._unsigned_frontier_size(
+                signed_count,
+                unsigned_count,
+            )
+            unsigned_idx = signed_count + random.randrange(unsigned_frontier)
             lib_id = order.pop(unsigned_idx)
             order.insert(random.randrange(signed_count + 1), lib_id)
             return order
