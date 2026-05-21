@@ -135,42 +135,47 @@ class Tweaks:
     def instance_adjusted_weights(weights, data):
         adjusted = dict(weights or Tweaks.DEFAULT_WEIGHTS)
         coverage_weight = adjusted.get("coverage_exchange", 0.0)
-        if Tweaks._is_uniform_coverage_instance(data):
-            paired_model = Tweaks._paired_choice_model(data)
-            if paired_model is not None and adjusted.get("paired_choice_flip", 0.0) > 0.0:
-                paired_target_share = 0.70
-                coverage_target_share = 0.20
-                other_total = sum(
-                    weight
-                    for label, weight in adjusted.items()
-                    if label not in {"coverage_exchange", "paired_choice_flip"}
-                )
-                if other_total > 0.0:
-                    remaining_share = 1.0 - paired_target_share - coverage_target_share
-                    adjusted["paired_choice_flip"] = max(
-                        adjusted["paired_choice_flip"],
-                        other_total * paired_target_share / remaining_share,
-                    )
-                    if coverage_weight > 0.0:
-                        adjusted["coverage_exchange"] = max(
-                            coverage_weight,
-                            other_total * coverage_target_share / remaining_share,
-                        )
-                return adjusted
+        if not Tweaks._is_uniform_coverage_instance(data):
+            adjusted["coverage_exchange"] = 0.0
+            adjusted["paired_choice_flip"] = 0.0
+            return adjusted
 
-            if coverage_weight > 0.0:
-                target_share = 0.55
-                other_total = sum(
-                    weight
-                    for label, weight in adjusted.items()
-                    if label != "coverage_exchange"
+        paired_model = Tweaks._paired_choice_model(data)
+        if paired_model is not None and adjusted.get("paired_choice_flip", 0.0) > 0.0:
+            paired_target_share = 0.40
+            coverage_target_share = 0.40
+            other_total = sum(
+                weight
+                for label, weight in adjusted.items()
+                if label not in {"coverage_exchange", "paired_choice_flip"}
+            )
+            if other_total > 0.0:
+                remaining_share = 1.0 - paired_target_share - coverage_target_share
+                adjusted["paired_choice_flip"] = max(
+                    adjusted["paired_choice_flip"],
+                    other_total * paired_target_share / remaining_share,
                 )
-                if other_total <= 0.0:
-                    return adjusted
-                adjusted["coverage_exchange"] = max(
-                    coverage_weight,
-                    other_total * target_share / (1.0 - target_share),
-                )
+                if coverage_weight > 0.0:
+                    adjusted["coverage_exchange"] = max(
+                        coverage_weight,
+                        other_total * coverage_target_share / remaining_share,
+                    )
+            return adjusted
+
+        adjusted["paired_choice_flip"] = 0.0
+        if coverage_weight > 0.0:
+            target_share = 0.55
+            other_total = sum(
+                weight
+                for label, weight in adjusted.items()
+                if label != "coverage_exchange"
+            )
+            if other_total <= 0.0:
+                return adjusted
+            adjusted["coverage_exchange"] = max(
+                coverage_weight,
+                other_total * target_share / (1.0 - target_share),
+            )
         return adjusted
 
     @staticmethod
@@ -793,28 +798,54 @@ class Tweaks:
 
         assignment = Tweaks._paired_assignment(solution, data, model)
         sat, current_score = Tweaks._paired_state_score(model, assignment)
+        cached_best = model.get("best_assignment")
+        if cached_best is not None:
+            cached_assignment = bytearray(cached_best)
+            cached_sat, cached_score = Tweaks._paired_state_score(model, cached_assignment)
+            if cached_score >= current_score:
+                assignment = cached_assignment
+                sat = cached_sat
+                current_score = cached_score
+
+        pair_count = model["pair_count"]
+        if pair_count >= 10000:
+            first_pass_flips = 6000
+            attempts = 24
+            max_flips = 12000
+        elif pair_count >= 1000:
+            first_pass_flips = 3500
+            attempts = 14
+            max_flips = 7000
+        else:
+            first_pass_flips = max(50, min(2000, pair_count // 3))
+            attempts = 6
+            max_flips = max(80, min(4000, pair_count // 2))
+
         Tweaks._paired_local_search(
             model,
             assignment,
             sat,
-            max_flips=max(50, min(2000, model["pair_count"] // 3)),
+            max_flips=first_pass_flips,
         )
         sat, current_score = Tweaks._paired_state_score(model, assignment)
         base_score = current_score
         best_assignment = bytearray(assignment)
         best_score = current_score
 
-        attempts = 8 if model["pair_count"] >= 1000 else 4
-        max_flips = max(80, min(4000, model["pair_count"] // 2))
         for attempt in range(attempts):
-            candidate = bytearray(assignment)
-            candidate_sat, _candidate_score = Tweaks._paired_state_score(model, candidate)
-            if attempt < attempts // 2:
-                strength = random.randint(4, max(8, min(96, model["pair_count"] // 150 + 8)))
+            if cached_best is not None and attempt % 2 == 1:
+                candidate = bytearray(cached_best)
             else:
-                strength = random.randint(24, max(32, min(256, model["pair_count"] // 60 + 24)))
+                candidate = bytearray(assignment)
+            candidate_sat, _candidate_score = Tweaks._paired_state_score(model, candidate)
+            if attempt < attempts // 3:
+                strength = random.randint(4, max(8, min(128, pair_count // 120 + 8)))
+            elif attempt < 2 * attempts // 3:
+                strength = random.randint(24, max(32, min(384, pair_count // 45 + 24)))
+            else:
+                strength = random.randint(96, max(128, min(900, pair_count // 18 + 96)))
             for _ in range(strength):
-                var = random.randrange(model["pair_count"])
+                var = random.randrange(pair_count)
                 Tweaks._paired_flip(model, candidate, candidate_sat, var)
             Tweaks._paired_local_search(
                 model,
@@ -829,6 +860,11 @@ class Tweaks:
             if candidate_score > best_score:
                 best_score = candidate_score
                 best_assignment = candidate
+
+        cached_best_score = model.get("best_score", -1)
+        if best_score > cached_best_score:
+            model["best_assignment"] = bytearray(best_assignment)
+            model["best_score"] = best_score
 
         if best_score <= base_score:
             return None

@@ -145,7 +145,6 @@ def run_instance(args, input_path, output_path):
         data,
         instance_name=instance_name,
         time_limit=args.time_limit,
-        max_iterations=args.max_iterations,
         pool_size=args.pool_size,
         init_max_time=args.init_max_time,
         init_budget_ratio=args.init_budget_ratio,
@@ -209,7 +208,7 @@ def build_argument_parser():
         "--max-iterations",
         type=int,
         default=None,
-        help="Deprecated compatibility flag; the outer ILS loop now runs until the time limit",
+        help="Deprecated no-op compatibility flag; search is time/stagnation driven",
     )
     parser.add_argument("--pool-size", type=int, default=None)
     parser.add_argument("--restart-threshold", type=int, default=None)

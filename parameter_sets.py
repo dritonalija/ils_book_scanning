@@ -23,6 +23,7 @@ PARAMETER_SETS = {
         "ls_order_weight": 1.0,
         "ls_insert_weight": 1.0,
         "ls_strategic_weight": 1.0,
+        "enable_initial_local_search": False,
         "alphas": ALPHA_POOLS["default"],
     },
     "irace": {
@@ -43,6 +44,7 @@ PARAMETER_SETS = {
         "ls_order_weight": 0.7117,
         "ls_insert_weight": 2.1158,
         "ls_strategic_weight": 0.7780,
+        "enable_initial_local_search": False,
         "alphas": ALPHA_POOLS["explore"],
     },
 }

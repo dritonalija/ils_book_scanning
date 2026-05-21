@@ -105,7 +105,6 @@ The solver screens multiple candidate orders before exact rebuilding:
 - `Fill Greedy raw`
 - `Fill Greedy rare`
 - `Branch Fill Greedy`
-- `Uniform Coverage Greedy + 1-swap` for uniform-score/sign-up/rate coverage instances
 - `Static Greedy cap/raw`
 - `Static Greedy cap/rare`
 - `Noisy Heap cap/raw`
@@ -134,9 +133,6 @@ selected starts.
   available scanning capacity, with optional rarity weighting.
 - `Branch Fill Greedy`: uses a stronger fill-ratio greedy with an upper-bound
   heap; this is most useful on dense, overlapping instances.
-- `Uniform Coverage Greedy + 1-swap`: a guarded constructor for instances that
-  reduce to weighted budgeted coverage because scores, signup times, and scan
-  rates are uniform.
 - `Static Greedy`: evaluates all remaining libraries each step and picks the
   current best.
 - `Noisy Heap`: same as heap greedy but with small random noise to diversify
@@ -198,13 +194,15 @@ It is a proxy-screened first-improvement hill climber:
 - start from the current solution
 - sample one tweak operator at a time
 - screen candidate moves with a cheap sequential proxy
-- score promising moves with the exact fast evaluator
+- score proxy-improving, plateau, and near-plateau probes with the exact fast evaluator
 - rebuild and accept only strict exact-fitness improvements
-- stop when time runs out, iteration cap is hit, or the no-improvement limit is reached
+- stop when time runs out or the no-improvement limit is reached
 
-After the randomized phase, a small deterministic polish pass is applied if
-time remains. Its budget is scaled by instance size, and it tries:
+After the randomized phase, an exact batch intensification and a small
+deterministic polish pass are applied if time remains. Their budgets are scaled
+by instance size, and they try:
 
+- sampled exact order-neighborhood moves
 - adjacent swaps in the signed prefix
 - short reinsertion moves in the signed prefix
 - boundary swaps between signed and unsigned libraries
@@ -688,6 +686,9 @@ for comparisons and ablation-style evaluation.
 The outer ILS loop is time-driven: once started, it continues exploring new
 perturbed and restarted solutions until the allotted `--time-limit` budget is
 exhausted.
+Each local-search phase is also time-driven, with `--local-no-improve-limit`
+used only as a stagnation cutoff so control can return to perturbation or
+restart logic when the current basin stops improving.
 
 ### Algorithm constants
 
@@ -701,12 +702,12 @@ exhausted.
 Instance-profile defaults are selected from input dimensions and total book
 occurrences:
 
-| Profile | Trigger summary | Pool | Restart | Perturb | Noisy | Local no-improve | LS iterations | LS time | Restart init max | Segment caps | Strength cap/divisor |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `huge` | very high library count, occurrence count, or day count | `4` | `3` | `8/3` | `0` | `120` | `900/650/450` | `1.1/0.5/0.7s` | `20s` | `20/10` | `8/5` |
-| `large` | high library count, occurrence count, or day count | `5` | `4` | `6/2` | `1` | `220` | `1400/1000/750` | `1.8/0.9/1.2s` | `30s` | `18/9` | `6/6` |
-| `medium` | medium library count, occurrence count, or day count | `6` | `5` | `4/2` | `2` | `320` | `2400/1700/1200` | `2.6/1.3/1.6s` | `45s` | `14/8` | `5/7` |
-| `small` | fallback profile | `8` | `6` | `3/1` | `3` | `320` | `3200/2200/1500` | `3.2/1.6/2.0s` | `60s` | `10/6` | `4/8` |
+| Profile | Trigger summary | Pool | Restart | Perturb | Noisy | Local no-improve | LS time | Restart init max | Segment caps | Strength cap/divisor |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `huge` | very high library count, occurrence count, or day count | `4` | `3` | `8/3` | `0` | `120` | `1.1/0.5/0.7s` | `20s` | `20/10` | `8/5` |
+| `large` | high library count, occurrence count, or day count | `5` | `4` | `6/2` | `1` | `220` | `1.8/0.9/1.2s` | `30s` | `18/9` | `6/6` |
+| `medium` | medium library count, occurrence count, or day count | `6` | `5` | `4/2` | `2` | `320` | `2.6/1.3/1.6s` | `45s` | `14/8` | `5/7` |
+| `small` | fallback profile | `8` | `6` | `3/1` | `3` | `320` | `3.2/1.6/2.0s` | `60s` | `10/6` | `4/8` |
 
 ### Perturbation and restart parameters
 

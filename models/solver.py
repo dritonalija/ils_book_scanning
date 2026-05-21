@@ -78,6 +78,9 @@ class Solver:
         if variant not in VALID_VARIANTS:
             raise ValueError(
                 f"Unknown variant '{variant}'. Choose from: {VALID_VARIANTS}")
+        # Accepted for backward-compatible CLI/API calls. Local search is
+        # governed by phase time limits and no-improvement limits.
+        _ = max_iterations
         if variant == 'ls_only':
             enable_initial_local_search = True
         previous_assignment_mode = getattr(data, "assignment_mode", "portfolio")
@@ -205,7 +208,6 @@ class Solver:
                 home_base = LocalSearch.local_search(
                     home_base, data,
                     time_limit=initial_ls_time,
-                    max_iterations=profile["initial_ls_iterations"],
                     no_improve_limit=local_no_improve_limit,
                     tweak_weights=tweak_weights,
                     operator_stats=operator_stats,
@@ -272,7 +274,6 @@ class Solver:
                 candidate = LocalSearch.local_search(
                     candidate, data,
                     time_limit=ls_time,
-                    max_iterations=profile["round_ls_iterations"],
                     no_improve_limit=local_no_improve_limit,
                     tweak_weights=tweak_weights,
                     operator_stats=operator_stats,
@@ -378,7 +379,6 @@ class Solver:
                     restart_state = LocalSearch.local_search(
                         restart_state, data,
                         time_limit=restart_time,
-                        max_iterations=profile["restart_ls_iterations"],
                         no_improve_limit=max(
                             profile["restart_no_improve_limit_floor"],
                             local_no_improve_limit // 2),
@@ -506,7 +506,7 @@ class Solver:
             "round": 0.08,
             "restart": 0.12,
         }[phase]
-        return min(base, max(0.05, remaining * reserve_ratio))
+        return min(base, remaining, max(0.05, remaining * reserve_ratio))
 
     def _accept_candidate(
         self,
@@ -664,10 +664,16 @@ class Solver:
         return ranked
 
     def _push_pool(self, home_pool, solution, pool_size):
-        if all(existing.fitness_score != solution.fitness_score for existing in home_pool):
-            home_pool.append(solution.clone())
-            home_pool.sort(key=lambda item: item.fitness_score, reverse=True)
-            del home_pool[pool_size:]
+        candidate_signature = tuple(solution.signed_libraries)
+        for existing in home_pool:
+            if (
+                existing.fitness_score == solution.fitness_score
+                and tuple(existing.signed_libraries) == candidate_signature
+            ):
+                return
+        home_pool.append(solution.clone())
+        home_pool.sort(key=lambda item: item.fitness_score, reverse=True)
+        del home_pool[pool_size:]
 
     def _restart_state(
         self, candidate_pool, home_pool, data, profile,
@@ -725,16 +731,12 @@ class Solver:
         ):
             return {
                 "name": "huge",
-                "max_iterations": 500,
                 "pool_size": 4,
                 "restart_threshold": 3,
                 "perturb_strength_base": 8,
                 "perturb_strength_growth": 3,
                 "noisy_restarts": 0,
                 "local_no_improve_limit": 120,
-                "initial_ls_iterations": 900,
-                "round_ls_iterations": 650,
-                "restart_ls_iterations": 450,
                 "initial_ls_time": 1.1,
                 "round_ls_time": 0.5,
                 "restart_ls_time": 0.7,
@@ -755,16 +757,12 @@ class Solver:
         ):
             return {
                 "name": "large",
-                "max_iterations": 800,
                 "pool_size": 5,
                 "restart_threshold": 4,
                 "perturb_strength_base": 6,
                 "perturb_strength_growth": 2,
                 "noisy_restarts": 1,
                 "local_no_improve_limit": 220,
-                "initial_ls_iterations": 1400,
-                "round_ls_iterations": 1000,
-                "restart_ls_iterations": 750,
                 "initial_ls_time": 1.8,
                 "round_ls_time": 0.9,
                 "restart_ls_time": 1.2,
@@ -782,16 +780,12 @@ class Solver:
         ):
             return {
                 "name": "medium",
-                "max_iterations": 1100,
                 "pool_size": 6,
                 "restart_threshold": 5,
                 "perturb_strength_base": 4,
                 "perturb_strength_growth": 2,
                 "noisy_restarts": 2,
                 "local_no_improve_limit": 320,
-                "initial_ls_iterations": 2400,
-                "round_ls_iterations": 1700,
-                "restart_ls_iterations": 1200,
                 "initial_ls_time": 2.6,
                 "round_ls_time": 1.3,
                 "restart_ls_time": 1.6,
@@ -804,16 +798,12 @@ class Solver:
             }
         return {
             "name": "small",
-            "max_iterations": 1500,
             "pool_size": 8,
             "restart_threshold": 6,
             "perturb_strength_base": 3,
             "perturb_strength_growth": 1,
             "noisy_restarts": 3,
             "local_no_improve_limit": 320,
-            "initial_ls_iterations": 3200,
-            "round_ls_iterations": 2200,
-            "restart_ls_iterations": 1500,
             "initial_ls_time": 3.2,
             "round_ls_time": 1.6,
             "restart_ls_time": 2.0,
