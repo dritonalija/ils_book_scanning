@@ -550,7 +550,7 @@ Full run:
 python run_experiments.py \
   --instances-file instances-test.txt \
   --algorithm ILS_iRace \
-  --param-set irace \
+  --param-set irace_final \
   --variants full \
   --time-limit 600 \
   --init-max-time 120 \
@@ -613,7 +613,7 @@ For component analysis, run the built-in ablations:
 python run_experiments.py \
   --instances-file instances-test.txt \
   --algorithm ILS_iRace \
-  --param-set irace \
+  --param-set irace_final \
   --variants full \
   --component-variants \
   --time-limit 600 \
@@ -632,7 +632,7 @@ python run_experiments.py \
   --instances-file instances-test.txt \
   --limit-instances 30 \
   --algorithm ILS_iRace \
-  --param-set irace \
+  --param-set irace_final \
   --variants full \
   --operator-ablations all \
   --time-limit 600 \
@@ -687,8 +687,8 @@ retune the solver.
 python app.py input/google_hashcode/e_so_many_books.txt output/google_hashcode/e_so_many_books.txt --time-limit 120
 ```
 
-By default, `app.py` now loads the `irace` parameter set. To switch back to the
-legacy CLI behavior, use:
+By default, `app.py` now loads the `irace_final` parameter set. To switch back
+to the legacy CLI behavior, use:
 
 ```bash
 python app.py input/google_hashcode/e_so_many_books.txt output/google_hashcode/e_so_many_books.txt --param-set default
@@ -802,13 +802,13 @@ Outputs are written to:
 |---|---:|---|
 | `input` | None | Single input instance path |
 | `output` | None | Single output path |
-| `--param-set` | `irace` | Named parameter set loaded before any explicit CLI overrides |
+| `--param-set` | `irace_final` | Named parameter set loaded before any explicit CLI overrides |
 | `--input-dir` | `input` | Batch input directory. In this repository, pass a dataset subfolder such as `input/google_hashcode` |
 | `--output-dir` | `output` | Batch output directory |
 | `--time-limit` | `300` | ILS improvement budget in seconds |
 | `--init-max-time` | `120` | Initial construction budget in seconds |
 | `--init-budget-ratio` | None | Optional cap for initial construction as a fraction of ILS time |
-| `--restart-init-budget-ratio` | `0.3648` via `irace` | Fraction of remaining ILS time allocated to restart initialization |
+| `--restart-init-budget-ratio` | `0.1491` via `irace_final` | Fraction of remaining ILS time allocated to restart initialization |
 | `--seed-solution` | None | Existing solution file used as the starting point before ILS; single-instance mode only |
 | `--seed` | `54` | Random seed |
 | `--quiet` | off | Suppress solver progress logs |
@@ -829,35 +829,37 @@ single-threaded seeded runs.
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--alphas` | `0.4 0.5 0.75 1.0 1.5 2.0` via `irace` | Alpha array used by construction heuristics |
-| `--grasp-rcl` | `0.2318` via `irace` | GRASP restricted candidate list ratio |
+| `--alphas` | `0.4 0.5 0.75 1.0 1.5 2.0` via `irace_final` | Alpha array used by construction heuristics |
+| `--grasp-rcl` | `0.1308` via `irace_final` | GRASP restricted candidate list ratio |
 | `--grasp-max-time` | `5.0` | Maximum GRASP construction time |
 
 Named parameter sets:
 
 - `default`: the baseline configuration that reproduces the earlier manually chosen CLI defaults
-- `irace`: a configuration seeded from the latest iRace postselection run; its
-  acceptance probability is interpreted by the current SA acceptance rule
+- `irace`: a previous iRace-seeded configuration retained for comparisons
+- `irace_final`: the final elite configuration from the 5000-experiment iRace
+  run; its acceptance probability is interpreted by the current SA acceptance
+  rule
 
 Any individual CLI flag such as `--accept-worse-prob` or `--alphas` still
 overrides the selected parameter set.
 
-In the current implementation, the `irace` parameter set is the active default
-for solver runs, while `default` remains available as a baseline configuration
-for comparisons and ablation-style evaluation.
+In the current implementation, the `irace_final` parameter set is the active
+default for solver runs, while `default` and `irace` remain available for
+comparisons and ablation-style evaluation.
 
 ### ILS and local-search parameters
 
 | Parameter | Default | Meaning |
 |---|---:|---|
 | `--pool-size` | auto | Elite home-base pool size |
-| `--restart-threshold` | `7` via `irace` | Stagnant rounds before restart |
-| `--local-no-improve-limit` | `449` via `irace` | Stop local search after this many non-improving steps |
-| `--accept-worse-prob` | `0.1466` via `irace` | Initial SA acceptance probability for a `1%` worse candidate |
-| `--sa-final-temperature-ratio` | `0.05` via `irace` | Final/initial temperature ratio in geometric SA cooling |
-| `--ls-order-weight` | `0.7117` via `irace` | Multiplier for reorder-style local-search operators |
-| `--ls-insert-weight` | `2.1158` via `irace` | Multiplier for insert/exchange local-search operators |
-| `--ls-strategic-weight` | `0.7780` via `irace` | Multiplier for targeted local-search operators |
+| `--restart-threshold` | `3` via `irace_final` | Stagnant rounds before restart |
+| `--local-no-improve-limit` | `316` via `irace_final` | Stop local search after this many non-improving steps |
+| `--accept-worse-prob` | `0.0320` via `irace_final` | Initial SA acceptance probability for a `1%` worse candidate |
+| `--sa-final-temperature-ratio` | `0.1699` via `irace_final` | Final/initial temperature ratio in geometric SA cooling |
+| `--ls-order-weight` | `0.6317` via `irace_final` | Multiplier for reorder-style local-search operators |
+| `--ls-insert-weight` | `2.3634` via `irace_final` | Multiplier for insert/exchange local-search operators |
+| `--ls-strategic-weight` | `1.9964` via `irace_final` | Multiplier for targeted local-search operators |
 | `--enable-initial-local-search` | off | Optional pre-ILS local-search pass; not part of the current iRace tuning space |
 | `--operators` | all | Restrict local search to a chosen subset of operators |
 
@@ -891,10 +893,10 @@ occurrences:
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--perturb-strength-base` | `4` via `irace` | Base perturbation strength |
-| `--perturb-strength-growth` | `3` via `irace` | Additional strength per stagnant round |
-| `--perturb-replace-bias` | `0.3751` via `irace` | Bias toward replace-subset perturbation |
-| `--restart-fresh-probability` | `0.2679` via `irace` | Probability that restart uses a fresh construction |
+| `--perturb-strength-base` | `2` via `irace_final` | Base perturbation strength |
+| `--perturb-strength-growth` | `0` via `irace_final` | Additional strength per stagnant round |
+| `--perturb-replace-bias` | `0.6794` via `irace_final` | Bias toward replace-subset perturbation |
+| `--restart-fresh-probability` | `0.4035` via `irace_final` | Probability that restart uses a fresh construction |
 
 ## Project Structure
 

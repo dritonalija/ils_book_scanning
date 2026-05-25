@@ -28,7 +28,7 @@ PARAMETER_SETS = {
     },
     "irace": {
         "description": (
-            "Configuration seeded from the best iRace postselection candidate; "
+            "Previous iRace-seeded configuration retained for comparisons; "
             "accept_worse_prob is interpreted by the current SA acceptance rule."
         ),
         "accept_worse_prob": 0.1466,
@@ -47,9 +47,30 @@ PARAMETER_SETS = {
         "enable_initial_local_search": False,
         "alphas": ALPHA_POOLS["explore"],
     },
+    "irace_final": {
+        "description": (
+            "Final iRace elite configuration 486 from the 5000-experiment run; "
+            "accept_worse_prob is interpreted by the current SA acceptance rule."
+        ),
+        "accept_worse_prob": 0.0320,
+        "sa_final_temperature_ratio": 0.1699,
+        "restart_threshold": 3,
+        "perturb_strength_base": 2,
+        "perturb_strength_growth": 0,
+        "grasp_rcl": 0.1308,
+        "restart_init_budget_ratio": 0.1491,
+        "perturb_replace_bias": 0.6794,
+        "restart_fresh_probability": 0.4035,
+        "local_no_improve_limit": 316,
+        "ls_order_weight": 0.6317,
+        "ls_insert_weight": 2.3634,
+        "ls_strategic_weight": 1.9964,
+        "enable_initial_local_search": False,
+        "alphas": ALPHA_POOLS["explore"],
+    },
 }
 
-DEFAULT_PARAMETER_SET_NAME = "irace"
+DEFAULT_PARAMETER_SET_NAME = "irace_final"
 
 
 def get_parameter_set(name):
