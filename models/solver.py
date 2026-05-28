@@ -1,23 +1,24 @@
 """
-Iterated Local Search (ILS) with random restarts for Book Scanning.
+Iterated Local Search (ILS) with multi-start stagnation restarts for Book Scanning.
 
 Supported variants for ablation studies:
   - full         : complete ILS configuration
   - no_perturb   : ILS without perturbation
   - no_restart   : ILS without restarts
   - no_accept    : ILS without acceptance of inferior candidates
+  - no_proxy     : local search uses full exact checks without proxy screening
+  - no_structured: disable conditional structured-instance operators
   - random_walk  : accept every perturbed candidate
+  - sequential_only : use only the official sequential assignment scorer
   - ls_only      : single local-search run without the ILS loop
 """
 
 import csv
+import math
 import os
 import random
 import time
 
-import numpy as np
-
-from models.evaluation import fast_evaluate_sequential
 from models.initial_solution import InitialSolution
 from models.local_search import LocalSearch
 from models.solution import Solution
@@ -25,29 +26,28 @@ from models.tweaks import Tweaks
 
 VALID_VARIANTS = {
     'full', 'no_perturb', 'no_restart', 'no_accept',
-    'random_walk', 'ls_only',
+    'no_proxy', 'no_structured', 'random_walk', 'sequential_only', 'ls_only',
 }
 
 
 class Solver:
-    PLATEAU_GAP_THRESHOLD = 0.003
-    PLATEAU_ACCEPT_PROB = 0.20
-    MIN_WORSE_ACCEPT_SCALE = 0.05
-    STAGNATION_BOOST_WINDOW = 8.0
+    SA_REFERENCE_GAP = 0.01
+    SA_FINAL_TEMPERATURE_RATIO = 0.05
+    SA_MIN_TEMPERATURE = 1e-12
     RESTART_PROTECTION_GAP = 0.003
     RESTART_PROTECTION_MULTIPLIER = 3
 
     def __init__(self, seed=None, verbose=True):
         self.verbose = verbose
-        if seed is not None:
-            random.seed(seed)
+        self._random_state = (
+            random.Random(seed).getstate() if seed is not None else None
+        )
 
     def iterated_local_search(
         self,
         data,
         instance_name=None,
         time_limit=300,
-        max_iterations=None,
         pool_size=None,
         init_max_time=120.0,
         init_budget_ratio=None,
@@ -56,11 +56,13 @@ class Solver:
         perturb_strength_base=None,
         perturb_strength_growth=None,
         accept_worse_prob=0.04,
+        sa_final_temperature_ratio=None,
         alpha_values=None,
         weighted_beta=0.12,
         grasp_rcl=0.05,
         grasp_max_time=5.0,
-        noisy_restarts=None,
+        seed_solution=None,
+        seed_label="seed_solution",
         local_no_improve_limit=None,
         ls_order_weight=1.0,
         ls_insert_weight=1.0,
@@ -68,16 +70,30 @@ class Solver:
         operator_weights=None,
         operators=None,
         enable_initial_local_search=False,
-        enable_direct_intensify=False,
         perturb_replace_bias=0.65,
         restart_fresh_probability=0.35,
         variant='full',
         log_csv=None,
+        operator_stats_csv=None,
     ):
         """Run the complete ILS pipeline for one instance."""
         if variant not in VALID_VARIANTS:
             raise ValueError(
                 f"Unknown variant '{variant}'. Choose from: {VALID_VARIANTS}")
+        if variant == 'ls_only':
+            enable_initial_local_search = True
+        previous_assignment_mode = getattr(data, "assignment_mode", "portfolio")
+        if variant == 'sequential_only':
+            data.assignment_mode = "sequential"
+        use_proxy = variant != 'no_proxy'
+
+        sa_final_temperature_ratio = (
+            self.SA_FINAL_TEMPERATURE_RATIO
+            if sa_final_temperature_ratio is None
+            else sa_final_temperature_ratio
+        )
+        if not 0.0 < sa_final_temperature_ratio <= 1.0:
+            raise ValueError("sa_final_temperature_ratio must be in (0, 1]")
 
         profile = self._instance_profile(data)
         pool_size = profile["pool_size"] if pool_size is None else pool_size
@@ -92,7 +108,6 @@ class Solver:
             profile["perturb_strength_growth"]
             if perturb_strength_growth is None else perturb_strength_growth
         )
-        noisy_restarts = profile["noisy_restarts"] if noisy_restarts is None else noisy_restarts
         local_no_improve_limit = (
             profile["local_no_improve_limit"]
             if local_no_improve_limit is None else local_no_improve_limit
@@ -111,11 +126,14 @@ class Solver:
             overrides=operator_weights,
             enabled=selected_operators,
         )
+        if variant == 'no_structured':
+            tweak_weights["coverage_exchange"] = 0.0
+            tweak_weights["paired_choice_flip"] = 0.0
         if sum(tweak_weights.values()) <= 0:
             raise ValueError("At least one enabled local-search operator must have positive weight")
 
         if self.verbose:
-            print("---------- ITERATED LOCAL SEARCH WITH RANDOM RESTARTS ----------")
+            print("---------- ITERATED LOCAL SEARCH WITH MULTI-START STAGNATION RESTARTS ----------")
             if instance_name:
                 print(
                     f"Instance: {instance_name} | "
@@ -132,6 +150,8 @@ class Solver:
         # Convergence log configuration.
         csv_writer = None
         csv_file = None
+        operator_stats = {}
+        operator_stats_path = operator_stats_csv or self._operator_stats_path(log_csv)
         if log_csv:
             os.makedirs(os.path.dirname(log_csv) or '.', exist_ok=True)
             csv_file = open(log_csv, 'w', newline='')
@@ -140,38 +160,52 @@ class Solver:
                 'timestamp', 'elapsed_s', 'phase', 'round',
                 'current_score', 'best_score', 'event'])
 
+        previous_random_state = None
+        if self._random_state is not None:
+            previous_random_state = random.getstate()
+            random.setstate(self._random_state)
+
         try:
             # Runtime accounting.
             time_construction = 0.0
             time_local_search = 0.0
             time_perturbation = 0.0
-            time_direct_search = 0.0
 
             # =============================================
             # Phase 1: Initial solution construction
             # =============================================
             t0 = time.time()
-            initial_solution, candidate_pool = InitialSolution.generate_initial_solution(
-                data,
-                max_time=initial_budget,
-                alphas=alpha_values,
-                beta=weighted_beta,
-                grasp_rcl=grasp_rcl,
-                grasp_max_time=grasp_max_time,
-                noisy_restarts=noisy_restarts,
-                verbose=self.verbose,
-            )
+            if seed_solution is not None:
+                initial_solution = seed_solution.clone()
+                candidate_pool = [
+                    (initial_solution.fitness_score, seed_label, initial_solution.clone())
+                ]
+                if self.verbose:
+                    print(
+                        f"Using seed solution: {seed_label} | "
+                        f"Score: {initial_solution.fitness_score:,}"
+                    )
+            else:
+                initial_solution, candidate_pool = InitialSolution.generate_initial_solution(
+                    data,
+                    max_time=initial_budget,
+                    alphas=alpha_values,
+                    beta=weighted_beta,
+                    grasp_rcl=grasp_rcl,
+                    grasp_max_time=grasp_max_time,
+                    verbose=self.verbose,
+                )
             time_construction = time.time() - t0
             initial_score = initial_solution.fitness_score
 
             best_solution = initial_solution.clone()
             home_base = initial_solution.clone()
-            best_label = "initial"
+            best_label = seed_label if seed_solution is not None else "initial"
 
             if csv_writer:
                 csv_writer.writerow([
                     time.time(), time_construction, 'construction', 0,
-                    initial_score, initial_score, 'initial_solution'])
+                    initial_score, initial_score, best_label])
 
             # =============================================
             # Phase 2: Optional initial local search
@@ -186,9 +220,10 @@ class Solver:
                 home_base = LocalSearch.local_search(
                     home_base, data,
                     time_limit=initial_ls_time,
-                    max_iterations=profile["initial_ls_iterations"],
                     no_improve_limit=local_no_improve_limit,
                     tweak_weights=tweak_weights,
+                    operator_stats=operator_stats,
+                    use_proxy=use_proxy,
                 )
                 time_local_search += time.time() - t0
 
@@ -217,40 +252,10 @@ class Solver:
                         home_base.fitness_score, best_solution.fitness_score,
                         'skipped'])
 
-            remaining_after_initial = max(0.0, time_limit - (time.time() - ils_start_time))
-            direct_search_time = self._direct_phase_time_limit(
-                data, profile, remaining_after_initial)
-            if enable_direct_intensify and direct_search_time > 0.0:
-                t0 = time.time()
-                direct_solution, direct_iterations = self._direct_intensify(
-                    home_base,
-                    data,
-                    time_limit=direct_search_time,
-                )
-                time_direct_search += time.time() - t0
-                if direct_solution.fitness_score > home_base.fitness_score:
-                    home_base = direct_solution
-                    self._push_pool(home_pool, home_base, pool_size)
-                    if home_base.fitness_score > best_solution.fitness_score:
-                        best_solution = home_base.clone()
-                        best_label = "direct_intensify"
-                    if self.verbose:
-                        print(
-                            f"Direct intensify: {home_base.initial_score or initial_score:,} -> "
-                            f"{home_base.fitness_score:,} "
-                            f"({direct_iterations} iters)"
-                        )
-                elif self.verbose:
-                    print(f"Direct intensify: no gain ({direct_iterations} iters)")
-                if csv_writer:
-                    csv_writer.writerow([
-                        time.time(), time.time() - ils_start_time, 'direct', 0,
-                        home_base.fitness_score, best_solution.fitness_score,
-                        f'direct_{direct_iterations}'])
-
             # Return immediately after the initial local-search phase.
             if variant == 'ls_only':
                 best_solution.initial_score = initial_score
+                self._write_operator_stats(operator_stats_path, operator_stats)
                 return best_solution
 
             # =============================================
@@ -282,9 +287,10 @@ class Solver:
                 candidate = LocalSearch.local_search(
                     candidate, data,
                     time_limit=ls_time,
-                    max_iterations=profile["round_ls_iterations"],
                     no_improve_limit=local_no_improve_limit,
                     tweak_weights=tweak_weights,
+                    operator_stats=operator_stats,
+                    use_proxy=use_proxy,
                 )
                 time_local_search += time.time() - t0
 
@@ -310,8 +316,20 @@ class Solver:
                 elif variant == 'no_accept':
                     accepted = candidate.fitness_score >= home_base.fitness_score
                 else:
+                    elapsed_ratio = min(
+                        1.0,
+                        max(
+                            0.0,
+                            (time.time() - ils_start_time) / max(1e-9, time_limit),
+                        ),
+                    )
                     accepted = self._accept_candidate(
-                        candidate, home_base, accept_worse_prob, stagnant_rounds)
+                        candidate,
+                        home_base,
+                        accept_worse_prob,
+                        elapsed_ratio,
+                        sa_final_temperature_ratio,
+                    )
 
                 if accepted:
                     improved_home = candidate.fitness_score > home_base.fitness_score
@@ -364,7 +382,6 @@ class Solver:
                         weighted_beta=weighted_beta,
                         grasp_rcl=grasp_rcl,
                         grasp_max_time=min(grasp_max_time, restart_init_budget * 0.5),
-                        noisy_restarts=noisy_restarts,
                         init_max_time=restart_init_budget,
                     )
                     restart_count += 1
@@ -375,11 +392,12 @@ class Solver:
                     restart_state = LocalSearch.local_search(
                         restart_state, data,
                         time_limit=restart_time,
-                        max_iterations=profile["restart_ls_iterations"],
                         no_improve_limit=max(
                             profile["restart_no_improve_limit_floor"],
                             local_no_improve_limit // 2),
                         tweak_weights=tweak_weights,
+                        operator_stats=operator_stats,
+                        use_proxy=use_proxy,
                     )
                     time_local_search += time.time() - t0
 
@@ -426,8 +444,6 @@ class Solver:
                 print(f"  Time breakdown:")
                 print(f"    Construction:  {time_construction:.2f}s")
                 print(f"    Local search:  {time_local_search:.2f}s")
-                if time_direct_search > 0.0:
-                    print(f"    Direct search: {time_direct_search:.2f}s")
                 print(f"    Perturbation:  {time_perturbation:.2f}s")
                 print(f"    Total ILS:     {total_time:.2f}s")
                 print(f"{'=' * 60}")
@@ -437,15 +453,58 @@ class Solver:
                     time.time(), total_time, 'final', outer_round,
                     best_solution.fitness_score, best_solution.fitness_score,
                     f'done_{best_label}'])
+            self._write_operator_stats(operator_stats_path, operator_stats)
 
             return best_solution
         finally:
+            data.assignment_mode = previous_assignment_mode
+            if self._random_state is not None:
+                self._random_state = random.getstate()
+                random.setstate(previous_random_state)
             if csv_file:
                 csv_file.close()
 
     # =============================================
     # Helper methods
     # =============================================
+
+    def _operator_stats_path(self, log_csv):
+        if not log_csv:
+            return None
+        root, _ext = os.path.splitext(log_csv)
+        return f"{root}.operators.csv"
+
+    def _write_operator_stats(self, path, operator_stats):
+        if not path:
+            return
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w', newline='') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow([
+                'operator',
+                'attempts',
+                'proxy_improved',
+                'exact_checked',
+                'accepted',
+                'rejected',
+                'acceptance_rate',
+                'exact_acceptance_rate',
+            ])
+            for label in Tweaks.operator_labels():
+                stats = operator_stats.get(label, {})
+                attempts = stats.get("attempts", 0)
+                exact_checked = stats.get("exact_checked", 0)
+                accepted = stats.get("accepted", 0)
+                writer.writerow([
+                    label,
+                    attempts,
+                    stats.get("proxy_improved", 0),
+                    exact_checked,
+                    accepted,
+                    stats.get("rejected", 0),
+                    f"{accepted / attempts:.6f}" if attempts else "0.000000",
+                    f"{accepted / exact_checked:.6f}" if exact_checked else "0.000000",
+                ])
 
     def _phase_time_limit(self, total_limit, start_time, profile, phase):
         remaining = max(0.0, total_limit - (time.time() - start_time))
@@ -461,166 +520,36 @@ class Solver:
             "round": 0.08,
             "restart": 0.12,
         }[phase]
-        return min(base, max(0.05, remaining * reserve_ratio))
+        return min(base, remaining, max(0.05, remaining * reserve_ratio))
 
-    def _direct_phase_time_limit(self, data, profile, remaining):
-        if remaining <= 3.0:
-            return 0.0
-        dense_small_library_instance = (
-            data.num_libs <= 250 and data.num_days <= 1000
-        )
-        if dense_small_library_instance:
-            return min(28.0, remaining * 0.60)
-        if profile["name"] == "small":
-            return min(14.0, remaining * 0.40)
-        if profile["name"] == "medium" and data.num_libs <= 1200:
-            return min(10.0, remaining * 0.25)
-        return 0.0
-
-    def _direct_intensify(
+    def _accept_candidate(
         self,
-        solution,
-        data,
-        time_limit,
-        p_swap=0.45,
-        p_insert=0.35,
-        anneal_prob=0.001,
+        candidate,
+        home_base,
+        accept_worse_prob,
+        elapsed_ratio,
+        sa_final_temperature_ratio=None,
     ):
-        if time_limit <= 0.0:
-            return solution.clone(), 0
-
-        flat = data.to_flat_arrays() if hasattr(data, "to_flat_arrays") else None
-        if flat is None:
-            return solution.clone(), 0
-
-        current_signed = solution.signed_libraries.copy()
-        current_unsigned = solution.unsigned_libraries.copy()
-        current_score = solution.fitness_score
-        best_score = current_score
-        best_order = current_signed + current_unsigned
-
-        start_time = time.time()
-        iterations = 0
-        t_insert = p_swap + p_insert
-
-        while time.time() - start_time < time_limit:
-            iterations += 1
-            move_type = random.random()
-            undo_op = None
-            signed_count = len(current_signed)
-
-            if move_type < p_swap:
-                if signed_count >= 2:
-                    idx1, idx2 = random.sample(range(signed_count), 2)
-                    current_signed[idx1], current_signed[idx2] = (
-                        current_signed[idx2],
-                        current_signed[idx1],
-                    )
-                    undo_op = ("swap", idx1, idx2)
-            elif move_type < t_insert:
-                if current_unsigned and current_signed:
-                    delta = random.randint(-1, 1)
-                    if delta == 0:
-                        i = random.randint(0, signed_count - 1)
-                        j = random.randint(0, len(current_unsigned) - 1)
-                        orig_c = current_signed[i]
-                        orig_u = current_unsigned[j]
-                        current_signed[i] = orig_u
-                        current_unsigned[j] = orig_c
-                        undo_op = ("swap_u", i, j, orig_c, orig_u)
-                    elif delta == 1:
-                        j = random.randint(0, len(current_unsigned) - 1)
-                        lib_id = current_unsigned.pop(j)
-                        pos = random.randint(0, signed_count)
-                        current_signed.insert(pos, lib_id)
-                        undo_op = ("insert_revert", pos, j, lib_id)
-                    else:
-                        i = random.randint(0, signed_count - 1)
-                        lib_id = current_signed.pop(i)
-                        current_unsigned.append(lib_id)
-                        undo_op = ("remove_revert", i)
-                elif current_unsigned:
-                    j = random.randint(0, len(current_unsigned) - 1)
-                    lib_id = current_unsigned.pop(j)
-                    current_signed.append(lib_id)
-                    undo_op = ("insert_revert", len(current_signed) - 1, j, lib_id)
-                elif signed_count > 0:
-                    i = random.randint(0, signed_count - 1)
-                    lib_id = current_signed.pop(i)
-                    current_unsigned.append(lib_id)
-                    undo_op = ("remove_revert", i)
-            else:
-                if signed_count >= 2:
-                    i = random.randint(0, signed_count - 1)
-                    lib_id = current_signed.pop(i)
-                    j = random.randint(0, len(current_signed))
-                    current_signed.insert(j, lib_id)
-                    undo_op = ("move_revert", i, j, lib_id)
-
-            if undo_op is None:
-                continue
-
-            candidate_order = np.array(current_signed + current_unsigned, dtype=np.int32)
-            score = int(fast_evaluate_sequential(
-                candidate_order,
-                flat["libs_signup"],
-                flat["libs_rate"],
-                flat["books_flat"],
-                flat["books_offsets"],
-                flat["books_lengths"],
-                flat["book_scores"],
-                flat["total_days"],
-            ))
-            accept = score > current_score
-            if not accept and random.random() < anneal_prob:
-                accept = True
-
-            if accept:
-                current_score = score
-                if score > best_score:
-                    best_score = score
-                    best_order = list(current_signed + current_unsigned)
-            else:
-                op = undo_op[0]
-                if op == "swap":
-                    i, j = undo_op[1], undo_op[2]
-                    current_signed[i], current_signed[j] = current_signed[j], current_signed[i]
-                elif op == "swap_u":
-                    i, j, orig_c, orig_u = undo_op[1:]
-                    current_signed[i] = orig_c
-                    current_unsigned[j] = orig_u
-                elif op == "insert_revert":
-                    pos, j, lib_id = undo_op[1:]
-                    current_signed.pop(pos)
-                    current_unsigned.insert(j, lib_id)
-                elif op == "remove_revert":
-                    i = undo_op[1]
-                    lib_id = current_unsigned.pop()
-                    current_signed.insert(i, lib_id)
-                elif op == "move_revert":
-                    _, i, j, lib_id = undo_op
-                    current_signed.pop(j)
-                    current_signed.insert(i, lib_id)
-
-        if best_score <= solution.fitness_score:
-            return solution.clone(), iterations
-
-        improved = Solution.from_order(best_order, data)
-        return improved, iterations
-
-    def _accept_candidate(self, candidate, home_base, accept_worse_prob, stagnant_rounds):
         if candidate.fitness_score >= home_base.fitness_score:
             return True
         if home_base.fitness_score <= 0:
             return False
         gap = (home_base.fitness_score - candidate.fitness_score) / home_base.fitness_score
-        if gap <= self.PLATEAU_GAP_THRESHOLD and random.random() < self.PLATEAU_ACCEPT_PROB:
-            return True
-        probability = (
-            accept_worse_prob
-            * max(self.MIN_WORSE_ACCEPT_SCALE, 1.0 - gap)
-            * (1.0 + min(1.0, stagnant_rounds / self.STAGNATION_BOOST_WINDOW))
+        if accept_worse_prob <= 0.0:
+            return False
+
+        initial_probability = min(max(accept_worse_prob, 1e-9), 1.0 - 1e-9)
+        initial_temperature = self.SA_REFERENCE_GAP / -math.log(initial_probability)
+        cooling_ratio = (
+            self.SA_FINAL_TEMPERATURE_RATIO
+            if sa_final_temperature_ratio is None
+            else sa_final_temperature_ratio
         )
+        temperature = max(
+            self.SA_MIN_TEMPERATURE,
+            initial_temperature * (cooling_ratio ** elapsed_ratio),
+        )
+        probability = math.exp(-gap / temperature)
         return random.random() < probability
 
     def _perturb_solution(self, solution, data, strength, profile, replace_bias):
@@ -749,15 +678,21 @@ class Solver:
         return ranked
 
     def _push_pool(self, home_pool, solution, pool_size):
-        if all(existing.fitness_score != solution.fitness_score for existing in home_pool):
-            home_pool.append(solution.clone())
-            home_pool.sort(key=lambda item: item.fitness_score, reverse=True)
-            del home_pool[pool_size:]
+        candidate_signature = tuple(solution.signed_libraries)
+        for existing in home_pool:
+            if (
+                existing.fitness_score == solution.fitness_score
+                and tuple(existing.signed_libraries) == candidate_signature
+            ):
+                return
+        home_pool.append(solution.clone())
+        home_pool.sort(key=lambda item: item.fitness_score, reverse=True)
+        del home_pool[pool_size:]
 
     def _restart_state(
         self, candidate_pool, home_pool, data, profile,
         restart_fresh_probability, alpha_values, weighted_beta,
-        grasp_rcl, grasp_max_time, noisy_restarts, init_max_time=None,
+        grasp_rcl, grasp_max_time, init_max_time=None,
     ):
         budget = init_max_time or profile["restart_init_max_time"]
         if random.random() < restart_fresh_probability:
@@ -775,7 +710,6 @@ class Solver:
                 beta=weighted_beta,
                 grasp_rcl=grasp_rcl,
                 grasp_max_time=min(grasp_max_time, budget),
-                noisy_restarts=noisy_restarts,
                 verbose=False,
             )
             return "fresh_init", fresh_solution
@@ -810,16 +744,11 @@ class Solver:
         ):
             return {
                 "name": "huge",
-                "max_iterations": 500,
                 "pool_size": 4,
                 "restart_threshold": 3,
                 "perturb_strength_base": 8,
                 "perturb_strength_growth": 3,
-                "noisy_restarts": 0,
                 "local_no_improve_limit": 120,
-                "initial_ls_iterations": 900,
-                "round_ls_iterations": 650,
-                "restart_ls_iterations": 450,
                 "initial_ls_time": 1.1,
                 "round_ls_time": 0.5,
                 "restart_ls_time": 0.7,
@@ -840,16 +769,11 @@ class Solver:
         ):
             return {
                 "name": "large",
-                "max_iterations": 800,
                 "pool_size": 5,
                 "restart_threshold": 4,
                 "perturb_strength_base": 6,
                 "perturb_strength_growth": 2,
-                "noisy_restarts": 1,
                 "local_no_improve_limit": 220,
-                "initial_ls_iterations": 1400,
-                "round_ls_iterations": 1000,
-                "restart_ls_iterations": 750,
                 "initial_ls_time": 1.8,
                 "round_ls_time": 0.9,
                 "restart_ls_time": 1.2,
@@ -867,16 +791,11 @@ class Solver:
         ):
             return {
                 "name": "medium",
-                "max_iterations": 1100,
                 "pool_size": 6,
                 "restart_threshold": 5,
                 "perturb_strength_base": 4,
                 "perturb_strength_growth": 2,
-                "noisy_restarts": 2,
                 "local_no_improve_limit": 320,
-                "initial_ls_iterations": 2400,
-                "round_ls_iterations": 1700,
-                "restart_ls_iterations": 1200,
                 "initial_ls_time": 2.6,
                 "round_ls_time": 1.3,
                 "restart_ls_time": 1.6,
@@ -889,16 +808,11 @@ class Solver:
             }
         return {
             "name": "small",
-            "max_iterations": 1500,
             "pool_size": 8,
             "restart_threshold": 6,
             "perturb_strength_base": 3,
             "perturb_strength_growth": 1,
-            "noisy_restarts": 3,
             "local_no_improve_limit": 320,
-            "initial_ls_iterations": 3200,
-            "round_ls_iterations": 2200,
-            "restart_ls_iterations": 1500,
             "initial_ls_time": 3.2,
             "round_ls_time": 1.6,
             "restart_ls_time": 2.0,

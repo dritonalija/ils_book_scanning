@@ -3,7 +3,7 @@
 An Iterated Local Search (ILS) solver for the Google Hash Code Book Scanning
 problem. The current implementation combines a multi-start construction phase,
 exact JIT-accelerated evaluation, randomized local search, adaptive
-perturbation, and random restarts.
+perturbation, and multi-start restarts after prolonged stagnation.
 
 ## Table of Contents
 
@@ -31,6 +31,7 @@ perturbation, and random restarts.
     - [Perturbation types](#perturbation-types)
   - [Restart Strategy](#restart-strategy)
   - [Instance Profiles](#instance-profiles)
+  - [Experimental Protocol](#experimental-protocol)
   - [CLI Usage](#cli-usage)
     - [Single instance](#single-instance)
     - [Batch mode](#batch-mode)
@@ -53,7 +54,7 @@ The `input/` directory currently contains four primary dataset collections:
 | Folder | Instances | Source | Purpose |
 |---|---:|---|---|
 | `google_hashcode/` | 5 | Google Hash Code 2020 Book Scanning problem instances | Official benchmark instances from the original dataset, also included in iRace elite testing |
-| `real_world/` | 51 | [Book Scanning Problem Input Generator](https://bookscanning-ig.netlify.app/) | Generated instances intended to reflect real-world scanning scenarios |
+| `real_world/` | 45 | [Book Scanning Problem Input Generator](https://bookscanning-ig.netlify.app/) | Generated instances intended to reflect real-world scanning scenarios |
 | `synthetic/` | 139 | [uran-lajci/Book.Scanning.Dataset](https://github.com/uran-lajci/Book.Scanning.Dataset) | Larger synthetic training and evaluation pool |
 | `seed_based/` | 135 | [dritonalija/book_scanning_dataset](https://github.com/dritonalija/book_scanning_dataset) | Seed-controlled generated instances for reproducible experiments |
 
@@ -61,8 +62,9 @@ Two practical notes about the current layout:
 
 - batch runs should target a specific dataset folder such as `input/google_hashcode`
   or `input/seed_based`
-- iRace tuning uses only `input/synthetic/` and `input/seed_based/`, split into
-  deterministic train/test lists via `instances.txt` and `instances-test.txt`
+- iRace tuning uses `input/synthetic/`, `input/seed_based/`, and
+  `input/real_world/`, split into deterministic train/test lists via
+  `instances.txt` and `instances-test.txt`
 - `google_hashcode/` is appended to `instances-test.txt` so iRace elite testing
   also considers the classic benchmark cases
 
@@ -101,6 +103,9 @@ The solver screens multiple candidate orders before exact rebuilding:
 - `Heap Greedy top/raw` for several `alpha` values
 - `Heap Greedy cap/raw`
 - `Heap Greedy cap/rare`
+- `Fill Greedy raw`
+- `Fill Greedy rare`
+- `Branch Fill Greedy`
 - `Static Greedy cap/raw`
 - `Static Greedy cap/rare`
 - `Noisy Heap cap/raw`
@@ -125,6 +130,10 @@ selected starts.
 - `Sorted`: ranks by `(signup_days, -total_book_score)`.
 - `Heap Greedy`: uses a priority queue and recomputes library value lazily as
   time and used books change.
+- `Fill Greedy`: favors libraries whose remaining useful books can fill their
+  available scanning capacity, with optional rarity weighting.
+- `Branch Fill Greedy`: uses a stronger fill-ratio greedy with an upper-bound
+  heap; this is most useful on dense, overlapping instances.
 - `Static Greedy`: evaluates all remaining libraries each step and picks the
   current best.
 - `Noisy Heap`: same as heap greedy but with small random noise to diversify
@@ -151,8 +160,8 @@ requiring a full exact rebuild for every candidate.
   faster-signup libraries more aggressively.
 - `grasp_rcl`: restricted candidate list ratio for GRASP.
 - `grasp_max_time`: dedicated GRASP budget. The solver still exposes it as a
-  CLI option with default `5s`, but the current iRace setup keeps it fixed
-  instead of tuning it.
+  CLI option with default `5s`; the iRace setup can tune it in the range
+  `0s` to `8s`.
 
 ## Exact Evaluation And Numba
 
@@ -162,27 +171,55 @@ In simple terms:
 
 - `Numba` makes the scoring code much faster
 - the final solution rebuild still uses the same scoring logic
-- some search steps use faster proxy scores so they can test more moves
+- `fast_evaluate` is the exact objective used during search; by default it is a
+  small portfolio that returns the best score among sequential, global, and
+  balanced-global assignment decoders for a fixed library order
+- local search first uses a cheap sequential proxy to screen order moves, then
+  checks surviving moves with `fast_evaluate`, and only rebuilds the full
+  solution for strict exact-objective improvements
+- on small/medium library-count instances, a balanced global assignment mode is
+  also considered when scoring and rebuilding a fixed order
+- the pure-Python rebuild fallback evaluates the same sequential, global, and
+  balanced-global assignment modes as the accelerated path
+- reusable work buffers avoid repeated allocation of full book/library masks
+  during high-frequency scoring calls
 - if `numba` is not available, the solver still works, just more slowly
 
 So `Numba` is a speed improvement, not a change to the objective.
+The `sequential_only` ablation variant disables the global and balanced-global
+assignment modes so the reported score comes only from the official sequential
+library-order assignment. The `no_proxy` ablation keeps the same exact
+objective but removes the cheap proxy screen, forcing local search to evaluate
+candidate order moves directly with `fast_evaluate`.
 
 ## Local Search
 
 Local search is implemented in `models/local_search.py`.
 
-It is a first-improvement hill climber:
+It has two stages:
 
-- start from the current solution
-- sample one tweak operator at a time
-- accept strict improvements immediately
-- stop when time runs out, iteration cap is hit, or the no-improvement limit is reached
+1. Proxy-guided exploration.
+   The search samples one tweak operator at a time. Fast order operators build a
+   candidate library order, screen it with a cheap sequential proxy, then verify
+   non-worse proxy moves with the exact `fast_evaluate` objective. Non-order
+   operators that already rebuild a solution are accepted only when the exact
+   solution score improves.
+2. Exact refinement.
+   The remaining local-search time is spent without the proxy. A unified
+   refinement pass samples broader order-neighborhood moves and then
+   deterministically polishes the most important part of the order.
 
-After the randomized phase, a small deterministic polish pass is applied if
-time remains. Its budget is scaled by instance size, and it tries:
+The exact refinement tries:
 
+- sampled exact order-neighborhood moves
 - adjacent swaps in the signed prefix
 - short reinsertion moves in the signed prefix
+- boundary swaps between signed and unsigned libraries
+
+Proxy evaluation is used only as a surrogate filter, while every accepted move
+is validated by the same exact decoder used for the exported solution. The
+final exact tail also reduces the risk that a useful solution is missed only
+because the proxy was imperfect.
 
 ### Tweak operators
 
@@ -200,6 +237,9 @@ Current operators:
 - `swap_neighbor_libraries`
 - `critical_path_insert`
 - `diversity_swap`
+- `sampled_best_exchange`
+- `coverage_exchange`
+- `paired_choice_flip`
 
 Their default sampling weights are:
 
@@ -215,6 +255,9 @@ Their default sampling weights are:
     "swap_neighbor_libraries": 0.8,
     "critical_path_insert": 0.7,
     "diversity_swap": 0.6,
+    "sampled_best_exchange": 0.45,
+    "coverage_exchange": 0.2,
+    "paired_choice_flip": 0.1,
 }
 ```
 
@@ -225,18 +268,25 @@ The solver can also scale these operators through three grouped multipliers:
 - `ls_insert_weight`: affects operators that exchange signed and unsigned
   libraries or insert/remove libraries
 - `ls_strategic_weight`: affects the more targeted operators
-  such as `diversity_swap`
+  such as `diversity_swap`, `sampled_best_exchange`, `coverage_exchange`,
+  and `paired_choice_flip`
 
 For manual experiments, the CLI also exposes per-operator overrides through
 `--w-...` flags. The final iRace configuration does not tune these
 individually; it tunes only the three grouped multipliers to keep the search
 space compact and interpretable.
 
+Two strategic operators are instance-class-conditional. `coverage_exchange`
+applies a maximum-coverage exchange only when the input has uniform
+score/signup/rate structure. `paired_choice_flip` is enabled only when that
+uniform instance also matches a paired binary-choice structure. They are part
+of the full solver for uniform structured instances, while the `no_structured`
+variant disables them for the general-neighborhood ablation.
+
 ## Batch Runs And Summaries
 
-The current codebase supports batch solving directly through `app.py`. During a
-batch run you can ask the solver to keep a live summary CSV with one row per
-instance.
+The current codebase supports batch solving directly through `app.py`. Batch
+runs can maintain a live summary CSV with one row per instance.
 
 Example:
 
@@ -249,42 +299,70 @@ python .\app.py `
   --validate
 ```
 
+Real-world batch evaluation uses the same pattern:
+
+```powershell
+python .\app.py `
+  --input-dir .\input\real_world `
+  --output-dir .\output\real_world `
+  --time-limit 120 `
+  --validate
+```
+
 Useful outputs:
 
-- solution files in the chosen `--output-dir`
-- per-run validation output if `--validate` is enabled
-- a batch summary CSV with the columns:
+- solution files in the chosen `--output-dir`, validated immediately after export
+- one operator-statistics sidecar CSV per solution
+- an optional extra batch validation pass if `--validate` is enabled
+- a batch summary CSV, written by default as
+  `<output-dir>/batch_summary_<input-folder>.csv`, with the columns:
 
 ```text
-instance, initial_score, final_score, elapsed_s, running_elapsed_s, improvement_pct, running_total_initial, running_total_final, running_total_improvement_pct
+instance, initial_score, final_score, upper_bound, gap_to_bound_pct, elapsed_s, running_elapsed_s, improvement_pct, running_total_initial, running_total_final, running_total_upper_bound, running_total_gap_to_bound_pct, running_total_improvement_pct
 ```
 
 ## iRace Tuning
 
 Use the full iRace configuration from `parameters.txt` and `scenario.txt`.
 
-The final tuning surface contains `13` parameters:
+The final tuning surface contains `14` parameters:
 
 - acceptance and restart control
+- simulated-annealing cooling ratio
 - perturbation strength and type bias
 - construction controls (`alpha_pool`, `grasp_rcl`)
 - restart construction budget ratio
 - local-search stagnation limit
 - the three grouped local-search operator weights
 
-The full tuning scenario uses `maxExperiments = 1500`, while
+The full tuning scenario uses `maxExperiments = 5000`, while
 `scenario-test.txt` provides a reduced `320`-experiment configuration.
+
+Both scenarios set `seed = 54` for reproducible tuning, matching the solver's
+default CLI seed. The target runner
+uses `300s` for ILS and an initial construction cap of `120s` by default.
+The final experimental evaluation uses `600s` for ILS; after tuning, transfer
+check the elite configuration at `600s` on a small validation subset before
+running final hold-out experiments. For short pilot tuning runs, override the
+defaults with environment variables:
+
+```bash
+IRACE_TIME_LIMIT=120 IRACE_INIT_BUDGET_CAP=30 \
+  Rscript -e "library(irace); irace(scenario=readScenario('scenario-test.txt'))"
+```
 
 Both iRace scenarios use `trainInstancesFile` and `testInstancesFile`.
 `instances.txt` contains the deterministic training split, and
 `instances-test.txt` contains the deterministic hold-out split plus the
+official Google Hash Code instances for elite testing.
 
 The current split is:
 
-- training: `220` instances total
-- test: `59` instances total
+- training: `256` instances total
+- test: `68` instances total
 - synthetic: `112` train, `27` test
 - seed_based: `108` train, `27` test
+- real_world: `36` train, `9` test
 - google_hashcode: `0` train, `5` test
 
 The split is deterministic and reproducible: every fifth instance in the
@@ -294,18 +372,18 @@ then added to the iRace test set so elite selection also accounts for them.
 
 The iRace scenarios keep progressive instance sampling enabled
 (`sampleInstances = 1`) and evaluate the top `5` elites on the hold-out split
-(`testNbElites = 5`). They also run up to `4` target-runner jobs in parallel
-(`targetRunnerParallel = 4`).
+(`testNbElites = 5`). They also run up to `6` target-runner jobs in parallel
+(`parallel = 6`).
 
 ### What each iRace file does
 
 - `parameters.txt`: declares the parameter search space for iRace
-- `scenario.txt`: main iRace run with the full `1500`-experiment budget
+- `scenario.txt`: main iRace run with the full `5000`-experiment budget
 - `scenario-test.txt`: smaller iRace run with a `320`-experiment budget
 - `instances.txt`: training instances used during tuning
 - `instances-test.txt`: hold-out instances used by iRace for elite testing
 - `target-runner.sh`: shell entry point called by iRace
-- `targetRunnerParallel = 4`: parallel target-runner jobs used by each scenario
+- `parallel = 6`: parallel target-runner jobs used by each scenario
 - `irace_runner.py`: Python adapter that receives candidate parameters from
   iRace, runs the solver on one instance, and prints a single cost value back
   to iRace
@@ -368,19 +446,23 @@ For each round:
 ### Acceptance rule
 
 The candidate is always accepted if it is at least as good as the home base.
-Otherwise:
-
-- if the relative gap is at most `0.3%`, it is accepted with probability `0.20`
-- else acceptance uses:
+Worse candidates use the standard simulated-annealing Metropolis rule:
 
 ```text
-accept_worse_prob * max(0.05, 1 - gap) * (1 + min(1, stagnant_rounds / 8))
+p(accept) = exp(-gap / T)
 ```
 
-This introduces limited flexibility near plateaus while still favoring
-high-quality solutions. In the code, these constants are named and treated as a
-stagnation-aware probabilistic acceptance rule rather than an unnamed
-heuristic condition.
+where `gap` is the relative score loss against the current home base. The
+temperature follows a geometric cooling schedule over the ILS time budget:
+
+```text
+T(t) = T0 * sa_final_temperature_ratio^(elapsed_time / time_limit)
+T0 = 0.01 / -ln(accept_worse_prob)
+```
+
+So `--accept-worse-prob` is the initial acceptance probability for a candidate
+that is `1%` worse than the home base. This keeps the probability parameter
+interpretable while using a textbook acceptance form.
 
 ## Perturbation
 
@@ -421,7 +503,8 @@ The new state is chosen from one of two sources:
 - an elite solution from the initial candidate pool or the home-base pool
 
 For small restart budgets, the solver uses a lightweight adaptive constructor
-instead of rerunning the full initialization pipeline.
+instead of rerunning the full initialization pipeline. Fresh adaptive restarts
+sample from heap-greedy and fill-greedy construction families.
 
 Each restarted solution also gets a short local-search pass before it becomes
 the new home base.
@@ -455,6 +538,147 @@ These profiles set defaults for:
 This keeps the strategy mostly dependent on instance size rather than on a
 single fixed parameter set.
 
+## Experimental Protocol
+
+For controlled batch experiments, prefer the dedicated runner over launching
+many manual `app.py` commands. The runner is parallel, resumable, validates
+every exported solution, and stores experiment metadata in one CSV.
+
+Full run:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --algorithm ILS_iRace \
+  --param-set irace_final \
+  --variants full \
+  --time-limit 600 \
+  --init-max-time 120 \
+  --runs-per-instance 10 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/experiments \
+  --convergence-instances-file diverse_instances.txt \
+  --convergence-seeds 1
+```
+
+This gives the ILS improvement phase `10` minutes per run:
+
+- initial construction is capped at `120s` and usually finishes earlier
+- the ILS improvement loop then receives `600s`
+- `10` seeds spread across `1..100`:
+  `1, 12, 23, 34, 45, 56, 67, 78, 89, 100`
+
+The total wall-clock time per run is therefore:
+
+```text
+actual construction time + 600s ILS
+```
+
+Unless `--results-csv` is provided explicitly, the runner writes raw per-run
+results to `<output-dir>/experiment_results.csv`.
+
+Use `--total-time-limit` only if the comparison protocol requires a strict
+wall-clock cap that includes construction.
+
+Use `--workers` for parallelism. Set the worker count according to available
+CPU, memory, and I/O capacity. A good starting point on a machine with enough
+headroom is `--workers 6`; reduce it if memory pressure, swap usage, or high
+load averages appear.
+Avoid running several large experiment sessions at once; it is cleaner to let
+one runner manage the queue and resume state.
+
+The full command checklist for tuning, evaluation, ablation, convergence, and
+statistical analysis is available in `docs/experiments.md`.
+
+Before the full run, do a pilot:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --limit-instances 20 \
+  --time-limit 120 \
+  --init-max-time 30 \
+  --runs-per-instance 2 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/pilot \
+  --convergence-instances-file diverse_instances.txt \
+  --convergence-seeds 1
+```
+
+For component analysis, run the built-in ablations:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --algorithm ILS_iRace \
+  --param-set irace_final \
+  --variants full \
+  --component-variants \
+  --time-limit 600 \
+  --init-max-time 120 \
+  --runs-per-instance 10 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/component_ablation
+```
+
+For operator-level ablation, use a smaller pilot first because this multiplies
+the experiment count by the number of operators:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --limit-instances 30 \
+  --algorithm ILS_iRace \
+  --param-set irace_final \
+  --variants full \
+  --operator-ablations all \
+  --time-limit 600 \
+  --init-max-time 120 \
+  --runs-per-instance 5 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/operator_ablation_pilot
+```
+
+After collecting results, summarize them and run Wilcoxon signed-rank tests:
+
+```bash
+python analyze_results.py \
+  --results-csv output/experiments/experiment_results.csv results/other_algorithms.csv \
+  --reference-method ILS_iRace:full \
+  --paired-metric mean \
+  --wilcoxon-alternative greater \
+  --output-dir results/analysis
+```
+
+The analysis writes:
+
+- `per_instance_summary.csv`: per-instance mean/best/median scores, average
+  gap-to-bound, and ratios against the reference and best method
+- `method_summary.csv`: dataset and overall summaries including scale-free
+  metrics such as mean gap-to-bound and mean ratio to the per-instance best
+- `wilcoxon_tests.csv`: paired Wilcoxon tests with raw p-values plus
+  Holm-Bonferroni and Benjamini-Hochberg corrections
+- `friedman_tests.csv`: omnibus Friedman tests and average ranks for
+  multi-method comparisons
+
+Plot convergence curves for the diverse instance set:
+
+```bash
+python plot_convergence.py \
+  --log-root logs/convergence \
+  --instances-file diverse_instances.txt \
+  --output-dir results/plots/convergence
+```
+
+If iRace is rerun, tune only on `instances.txt`, choose the final parameter
+set, update `parameter_sets.py`, commit that version, and then run the final
+hold-out experiments on `instances-test.txt`. Do not use hold-out results to
+retune the solver.
+
 ## CLI Usage
 
 ### Single instance
@@ -463,8 +687,8 @@ single fixed parameter set.
 python app.py input/google_hashcode/e_so_many_books.txt output/google_hashcode/e_so_many_books.txt --time-limit 120
 ```
 
-By default, `app.py` now loads the `irace` parameter set. To switch back to the
-legacy CLI behavior, use:
+By default, `app.py` now loads the `irace_final` parameter set. To switch back
+to the legacy CLI behavior, use:
 
 ```bash
 python app.py input/google_hashcode/e_so_many_books.txt output/google_hashcode/e_so_many_books.txt --param-set default
@@ -485,9 +709,20 @@ python app.py --input-dir input/google_hashcode --output-dir output/google_hashc
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_perturb
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_restart
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_accept
+python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_proxy
+python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant no_structured
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant random_walk
+python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant sequential_only
 python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --variant ls_only
 ```
+
+- `full`: complete solver configuration.
+- `no_proxy`: disables surrogate screening inside local search; useful for the
+  proxy ablation.
+- `no_structured`: disables the conditional uniform/paired-instance operators;
+  useful for showing how much they contribute on structured uniform instances.
+- `sequential_only`: disables the portfolio decoder and scores only with the
+  sequential assignment rule.
 
 ### Convergence logging
 
@@ -499,6 +734,25 @@ This writes one CSV per instance with:
 
 ```text
 timestamp, elapsed_s, phase, round, current_score, best_score, event
+```
+
+Operator-statistics CSVs are opt-in. For one instance, choose the exact file:
+
+```bash
+python app.py input/google_hashcode/e_so_many_books.txt output/google_hashcode/e_so_many_books.txt --operator-stats-csv logs/e_operators.csv
+```
+
+For batch runs, choose a directory and the solver writes one operator CSV per
+instance:
+
+```bash
+python app.py --input-dir input/google_hashcode --output-dir output/google_hashcode --operator-stats-dir logs/operators
+```
+
+Operator-statistics CSVs contain:
+
+```text
+operator, attempts, proxy_improved, exact_checked, accepted, rejected, acceptance_rate, exact_acceptance_rate
 ```
 
 ## Docker Usage
@@ -548,68 +802,101 @@ Outputs are written to:
 |---|---:|---|
 | `input` | None | Single input instance path |
 | `output` | None | Single output path |
-| `--param-set` | `irace` | Named parameter set loaded before any explicit CLI overrides |
+| `--param-set` | `irace_final` | Named parameter set loaded before any explicit CLI overrides |
 | `--input-dir` | `input` | Batch input directory. In this repository, pass a dataset subfolder such as `input/google_hashcode` |
 | `--output-dir` | `output` | Batch output directory |
 | `--time-limit` | `300` | ILS improvement budget in seconds |
 | `--init-max-time` | `120` | Initial construction budget in seconds |
 | `--init-budget-ratio` | None | Optional cap for initial construction as a fraction of ILS time |
-| `--restart-init-budget-ratio` | `0.3648` via `irace` | Fraction of remaining ILS time allocated to restart initialization |
+| `--restart-init-budget-ratio` | `0.1491` via `irace_final` | Fraction of remaining ILS time allocated to restart initialization |
+| `--seed-solution` | None | Existing solution file used as the starting point before ILS; single-instance mode only |
 | `--seed` | `54` | Random seed |
 | `--quiet` | off | Suppress solver progress logs |
-| `--validate` | off | Validate generated outputs |
+| `--validate` | off | Print single-output validation, or run an extra batch validation pass after per-instance validation |
 | `--variant` | `full` | Ablation mode |
 | `--log-csv` | None | Output directory for convergence CSVs |
-| `--summary-csv` | None | Batch summary CSV updated after each instance |
+| `--operator-stats-csv` | None | Single-instance path for local-search operator statistics CSV |
+| `--operator-stats-dir` | None | Directory for per-instance local-search operator statistics CSVs |
+| `--summary-csv` | auto | Batch summary CSV updated after each instance; defaults to `<output-dir>/batch_summary_<input-folder>.csv` |
+
+Reproducibility note: `Solver(seed=...)` keeps its own deterministic random
+state and restores Python's process-global random state after each run. The
+legacy construction and tweak modules still draw through Python's `random`
+module during the run, so experiments should be treated as single-process,
+single-threaded seeded runs.
 
 ### Initial-solution parameters
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--alphas` | `0.4 0.5 0.75 1.0 1.5 2.0` via `irace` | Alpha array used by construction heuristics |
-| `--grasp-rcl` | `0.2318` via `irace` | GRASP restricted candidate list ratio |
+| `--alphas` | `0.4 0.5 0.75 1.0 1.5 2.0` via `irace_final` | Alpha array used by construction heuristics |
+| `--grasp-rcl` | `0.1308` via `irace_final` | GRASP restricted candidate list ratio |
 | `--grasp-max-time` | `5.0` | Maximum GRASP construction time |
-| `--noisy-restarts` | auto | Number of noisy construction variants from the profile |
 
 Named parameter sets:
 
 - `default`: the baseline configuration that reproduces the earlier manually chosen CLI defaults
-- `irace`: the tuned configuration obtained from the latest iRace postselection run
+- `irace`: a previous iRace-seeded configuration retained for comparisons
+- `irace_final`: the final elite configuration from the 5000-experiment iRace
+  run; its acceptance probability is interpreted by the current SA acceptance
+  rule
 
 Any individual CLI flag such as `--accept-worse-prob` or `--alphas` still
 overrides the selected parameter set.
 
-In the current implementation, the `irace` parameter set is the active default
-for solver runs, while `default` remains available as a baseline configuration
-for comparisons and ablation-style evaluation.
+In the current implementation, the `irace_final` parameter set is the active
+default for solver runs, while `default` and `irace` remain available for
+comparisons and ablation-style evaluation.
 
 ### ILS and local-search parameters
 
 | Parameter | Default | Meaning |
 |---|---:|---|
 | `--pool-size` | auto | Elite home-base pool size |
-| `--restart-threshold` | `7` via `irace` | Stagnant rounds before restart |
-| `--local-no-improve-limit` | `449` via `irace` | Stop local search after this many non-improving steps |
-| `--accept-worse-prob` | `0.1466` via `irace` | Base probability for accepting worse candidates |
-| `--ls-order-weight` | `0.7117` via `irace` | Multiplier for reorder-style local-search operators |
-| `--ls-insert-weight` | `2.1158` via `irace` | Multiplier for insert/exchange local-search operators |
-| `--ls-strategic-weight` | `0.7780` via `irace` | Multiplier for targeted local-search operators |
+| `--restart-threshold` | `3` via `irace_final` | Stagnant rounds before restart |
+| `--local-no-improve-limit` | `316` via `irace_final` | Stop local search after this many non-improving steps |
+| `--accept-worse-prob` | `0.0320` via `irace_final` | Initial SA acceptance probability for a `1%` worse candidate |
+| `--sa-final-temperature-ratio` | `0.1699` via `irace_final` | Final/initial temperature ratio in geometric SA cooling |
+| `--ls-order-weight` | `0.6317` via `irace_final` | Multiplier for reorder-style local-search operators |
+| `--ls-insert-weight` | `2.3634` via `irace_final` | Multiplier for insert/exchange local-search operators |
+| `--ls-strategic-weight` | `1.9964` via `irace_final` | Multiplier for targeted local-search operators |
+| `--enable-initial-local-search` | off | Optional pre-ILS local-search pass; not part of the current iRace tuning space |
 | `--operators` | all | Restrict local search to a chosen subset of operators |
 
 The outer ILS loop is time-driven: once started, it continues exploring new
 perturbed and restarted solutions until the allotted `--time-limit` budget is
 exhausted.
+Each local-search phase is also time-driven, with `--local-no-improve-limit`
+used only as a stagnation cutoff so control can return to perturbation or
+restart logic when the current basin stops improving.
+
+### Algorithm constants
+
+| Constant | Value | Meaning |
+|---|---:|---|
+| `SA_REFERENCE_GAP` | `0.01` | Reference worsening used to map `--accept-worse-prob` to the initial temperature |
+| `SA_MIN_TEMPERATURE` | `1e-12` | Lower bound for the SA temperature |
+| `RESTART_PROTECTION_GAP` | `0.003` | Score gap used by restart-protection logic |
+| `RESTART_PROTECTION_MULTIPLIER` | `3` | Multiplier for protected restart thresholds |
+
+Instance-profile defaults are selected from input dimensions and total book
+occurrences:
+
+| Profile | Trigger summary | Pool | Restart | Perturb | Noisy | Local no-improve | LS time | Restart init max | Segment caps | Strength cap/divisor |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `huge` | very high library count, occurrence count, or day count | `4` | `3` | `8/3` | `0` | `120` | `1.1/0.5/0.7s` | `20s` | `20/10` | `8/5` |
+| `large` | high library count, occurrence count, or day count | `5` | `4` | `6/2` | `1` | `220` | `1.8/0.9/1.2s` | `30s` | `18/9` | `6/6` |
+| `medium` | medium library count, occurrence count, or day count | `6` | `5` | `4/2` | `2` | `320` | `2.6/1.3/1.6s` | `45s` | `14/8` | `5/7` |
+| `small` | fallback profile | `8` | `6` | `3/1` | `3` | `320` | `3.2/1.6/2.0s` | `60s` | `10/6` | `4/8` |
 
 ### Perturbation and restart parameters
 
 | Parameter | Default | Meaning |
 |---|---:|---|
-| `--perturb-strength-base` | `4` via `irace` | Base perturbation strength |
-| `--perturb-strength-growth` | `3` via `irace` | Additional strength per stagnant round |
-| `--perturb-replace-bias` | `0.3751` via `irace` | Bias toward replace-subset perturbation |
-| `--restart-fresh-probability` | `0.2679` via `irace` | Probability that restart uses a fresh construction |
-| `--enable-initial-local-search` | off | Run the optional pre-ILS local-search pass |
-| `--enable-direct-intensify` | off | Run the optional direct intensification phase before ILS |
+| `--perturb-strength-base` | `2` via `irace_final` | Base perturbation strength |
+| `--perturb-strength-growth` | `0` via `irace_final` | Additional strength per stagnant round |
+| `--perturb-replace-bias` | `0.6794` via `irace_final` | Bias toward replace-subset perturbation |
+| `--restart-fresh-probability` | `0.4035` via `irace_final` | Probability that restart uses a fresh construction |
 
 ## Project Structure
 
@@ -654,7 +941,14 @@ Install the Python dependencies with:
 pip install -r requirements.txt
 ```
 
-`numba` is optional but strongly recommended for larger experimental runs.
+After installing the dependencies on the execution environment, freeze the exact
+environment if an immutable experiment record is needed:
+
+```bash
+pip freeze > requirements-lock.txt
+```
+
+`numba` is strongly recommended for larger experimental runs.
 
 ## References
 

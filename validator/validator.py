@@ -1,6 +1,11 @@
 import os
 import sys
 
+
+def _percentage(part, total):
+    return (part / total * 100.0) if total > 0 else 0.0
+
+
 def read_input_file(input_path):
     with open(input_path, 'r') as file:
         lines = file.readlines()
@@ -32,10 +37,16 @@ def read_output_file(output_path):
     return num_libraries, solution
 
 def validate_solution(input_path, output_path, isConsoleApplication = False):
-    B, L, D, book_scores, libraries = read_input_file(input_path)
-    num_libraries, solution = read_output_file(output_path)
-
     errors = []
+    try:
+        B, L, D, book_scores, libraries = read_input_file(input_path)
+        num_libraries, solution = read_output_file(output_path)
+    except (OSError, ValueError, IndexError) as exc:
+        errors.append(f"Could not read solution files: {exc}")
+        if isConsoleApplication:
+            return "Invalid"
+        return "\n".join(errors)
+
     valid_libraries_info = []
     all_scanned_books = set()
 
@@ -49,7 +60,6 @@ def validate_solution(input_path, output_path, isConsoleApplication = False):
     if num_libraries > L:
         errors.append(f"Invalid solution: Output references {num_libraries} libraries, but only {L} exist.")
 
-    assigned_books = set()
     used_libraries = set()
     total_days_used = 0
     total_score = 0
@@ -64,7 +74,7 @@ def validate_solution(input_path, output_path, isConsoleApplication = False):
         num_books = entry[1]
         books = entry[2] if len(entry) > 2 else []
 
-        if lib_id >= L:
+        if lib_id < 0 or lib_id >= L:
             errors.append(f"Library {lib_id} does not exist.")
             continue
         
@@ -82,6 +92,25 @@ def validate_solution(input_path, output_path, isConsoleApplication = False):
         invalid_books = [b for b in books if b not in library_books]
         if invalid_books:
             errors.append(f"Library {lib_id} contains invalid books: {invalid_books}.")
+
+        out_of_range_books = [b for b in books if b < 0 or b >= B]
+        if out_of_range_books:
+            errors.append(f"Library {lib_id} references out-of-range books: {out_of_range_books}.")
+
+        seen_books = set()
+        duplicate_in_library = []
+        for book_id in books:
+            if book_id in seen_books:
+                duplicate_in_library.append(book_id)
+            else:
+                seen_books.add(book_id)
+        duplicate_in_library = sorted(set(duplicate_in_library))
+        if duplicate_in_library:
+            errors.append(f"Library {lib_id} lists duplicate books: {duplicate_in_library}.")
+
+        duplicate_global = [b for b in books if b in all_scanned_books]
+        if duplicate_global:
+            errors.append(f"Library {lib_id} repeats already scanned books: {duplicate_global}.")
         
         if lib_id in used_libraries:
             errors.append(f"Library {lib_id} is listed multiple times in the solution.")
@@ -92,7 +121,6 @@ def validate_solution(input_path, output_path, isConsoleApplication = False):
         unique_books = [b for b in books if b not in all_scanned_books]
         all_scanned_books.update(unique_books)
         
-        assigned_books.update(unique_books)
         libraries_used += 1
 
         remaining_days = D - total_days_used
@@ -101,35 +129,24 @@ def validate_solution(input_path, output_path, isConsoleApplication = False):
             continue
 
         max_possible_books = min(remaining_days * M, len(library_books))
-        if len(unique_books) > max_possible_books:
-            errors.append(f"Library {lib_id} attempts to scan {len(unique_books)} books, exceeding the limit of {max_possible_books}.")
+        if len(books) > max_possible_books:
+            errors.append(f"Library {lib_id} attempts to scan {len(books)} books, exceeding the limit of {max_possible_books}.")
 
         total_score += sum(book_scores[b] for b in unique_books if 0 <= b < len(book_scores))
 
         scanned_books = [(b, book_scores[b] if 0 <= b < len(book_scores) else 0) for b in unique_books]
         valid_libraries_info.append(
-            f"Library {lib_id}:"
+            f"Library {lib_id}: "
             f"Scanned books: {', '.join([f'book {b} (score {s})' for b, s in scanned_books])}"
         )
 
     all_available_books = set(range(B))
     not_scanned_books = all_available_books - all_scanned_books
-    not_scanned_books_sorted = sorted(not_scanned_books, key=lambda b: book_scores[b] if 0 <= b < len(book_scores) else 0, reverse=True)
-    not_scanned_books_str = ", ".join([f"book {b} (score {book_scores[b] if 0 <= b < len(book_scores) else 0})" for b in not_scanned_books_sorted])
-
-    # Fitness Score Calculation
-    total_possible_score = sum(book_scores)  # Max possible score if all books were scanned
-
-    score_efficiency = total_score / total_possible_score if total_possible_score > 0 else 0
-    library_utilization = libraries_used / L if L > 0 else 0
-    book_scanning_efficiency = len(all_scanned_books) / B if B > 0 else 0
-
-    fitness_score = (0.5 * score_efficiency) + (0.3 * library_utilization) + (0.2 * book_scanning_efficiency)
 
     if isConsoleApplication:
-            if errors:
-                return "Invalid"
-            return "Valid"
+        if errors:
+            return "Invalid"
+        return "Valid"
     
     if errors:
         return "\n".join(errors)
@@ -137,12 +154,11 @@ def validate_solution(input_path, output_path, isConsoleApplication = False):
     result = (
     f"Solution is valid!\n"
     f"Total score: {total_score}\n"
-    f"Fitness score: {fitness_score:.4f}\n\n"
-    f"Signed up libraries: {libraries_used}/{L} ({(libraries_used / L) * 100:.2f}%)\n"
-    f"Unigned up libraries: {L-libraries_used}/{L} ({((L-libraries_used) / L) * 100:.2f}%)\n"
-    f"Scanned books: {len(all_scanned_books)}/{B} ({(len(all_scanned_books) / B) * 100:.2f}%)\n"
-    f"Unscanned books: {len(not_scanned_books)}/{B} ({(len(not_scanned_books) / B) * 100:.2f}%)\n"
-    f"Used days: {total_days_used}/{D} ({total_days_used / B * 100:.2f}%)\n\n"
+    f"Signed up libraries: {libraries_used}/{L} ({_percentage(libraries_used, L):.2f}%)\n"
+    f"Unsigned libraries: {L-libraries_used}/{L} ({_percentage(L-libraries_used, L):.2f}%)\n"
+    f"Scanned books: {len(all_scanned_books)}/{B} ({_percentage(len(all_scanned_books), B):.2f}%)\n"
+    f"Unscanned books: {len(not_scanned_books)}/{B} ({_percentage(len(not_scanned_books), B):.2f}%)\n"
+    f"Used days: {total_days_used}/{D} ({_percentage(total_days_used, D):.2f}%)\n\n"
     )
 
     if isConsoleApplication:

@@ -1,0 +1,11 @@
+# Test-set instances with visible ILS improvement for convergence plots.
+input/synthetic/synthetic_60.txt
+input/synthetic/synthetic_20.txt
+input/seed_based/ce_060x_012t.txt
+input/seed_based/ce_090x_008t.txt
+input/real_world/B90k_L850_D21.txt
+input/real_world/B35k_L60_D120.txt
+input/real_world/B2000k_L140_D280.txt
+input/google_hashcode/e_so_many_books.txt
+input/google_hashcode/d_tough_choices.txt
+input/google_hashcode/f_libraries_of_the_world.txt
