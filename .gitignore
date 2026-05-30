@@ -5,3 +5,4 @@ __pycache__/
 irace_output/
 logs/
 seed/
+results/

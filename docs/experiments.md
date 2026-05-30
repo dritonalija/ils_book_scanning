@@ -203,24 +203,36 @@ individual solver runs.
 
 ## 6. Component Ablation
 
-Run component ablation only on the test set:
+Run component ablation only on the held-out test set. The `full` variant is
+already available from the final evaluation in
+`output/experiments_full/experiment_results.csv`, so this command runs only the
+four core component-ablation variants:
 
 ```bash
 python run_experiments.py \
   --instances-file instances-test.txt \
   --algorithm ILS_iRace \
   --param-set irace_final \
-  --variants full \
-  --component-variants \
+  --variants ls_only no_perturb no_restart no_accept \
   --time-limit 600 \
   --init-max-time 120 \
   --runs-per-instance 10 \
   --seed-range 1 100 \
   --workers 6 \
-  --output-dir output/component_ablation
+  --output-dir output/component_ablation_no_full
 ```
 
 This evaluates:
+
+```text
+ls_only
+no_perturb
+no_restart
+no_accept
+```
+
+Together with the existing final-evaluation `full` rows, this gives the full
+core component comparison:
 
 ```text
 full
@@ -228,18 +240,19 @@ ls_only
 no_perturb
 no_restart
 no_accept
-no_proxy
 ```
 
 `sequential_only` and `no_structured` remain available as manual variants, but
 they are not included in the default component set. `sequential_only` evaluates
 the decoder choice, while `no_structured` is relevant only for structured
-uniform instances.
+uniform instances. `no_proxy` is also available as an optional proxy-screening
+ablation, but it is treated as a secondary performance/implementation check
+rather than a core ILS component.
 
 Raw results:
 
 ```text
-output/component_ablation/experiment_results.csv
+output/component_ablation_no_full/experiment_results.csv
 ```
 
 ## 7. Convergence Runs
@@ -354,7 +367,35 @@ Raw results:
 output/operator_ablation/experiment_results.csv
 ```
 
-## 10. Baseline Results From Other Algorithms
+## 10. Weak Initial Solution Robustness
+
+Run ILS from a deliberately simple sorted initial solution on the test set:
+
+```bash
+python run_experiments.py \
+  --instances-file instances-test.txt \
+  --algorithm ILS_iRace \
+  --param-set irace_final \
+  --variants weak_sorted_init \
+  --time-limit 600 \
+  --init-max-time 120 \
+  --runs-per-instance 10 \
+  --seed-range 1 100 \
+  --workers 6 \
+  --output-dir output/weak_sorted_init
+```
+
+This variant skips the normal multi-constructor/GRASP initial solution search
+and starts from the deterministic `Sorted` constructor only. It then runs the
+same ILS improvement phase as the full configuration.
+
+Raw results:
+
+```text
+output/weak_sorted_init/experiment_results.csv
+```
+
+## 11. Baseline Results From Other Algorithms
 
 External baseline results should be converted to CSV before analysis.
 
@@ -391,7 +432,7 @@ input/real_world/B1000k_L115_D230.txt
 If a baseline has one result per instance, use `seed=1`. If it has multiple
 runs, use the actual run seeds or run ids.
 
-## 11. Statistical Analysis
+## 12. Statistical Analysis
 
 Analyze final ILS results against external baselines:
 
@@ -406,11 +447,21 @@ python analyze_results.py \
   --output-dir results/analysis_full
 ```
 
-Analyze component ablation:
+Prepare the held-out `full` baseline for component ablation by filtering the
+final evaluation results to `instances-test.txt`:
+
+```bash
+python -c "from pathlib import Path; import pandas as pd; test={line.strip() for line in Path('instances-test.txt').read_text().splitlines() if line.strip() and not line.strip().startswith('#')}; df=pd.read_csv('output/experiments_full/experiment_results.csv'); df[df['instance'].isin(test)].to_csv('results/full_test_only.csv', index=False)"
+```
+
+Analyze component ablation by combining the existing `full` test-set rows with
+the ablation-only run:
 
 ```bash
 python analyze_results.py \
-  --results-csv output/component_ablation/experiment_results.csv \
+  --results-csv \
+    results/full_test_only.csv \
+    output/component_ablation_no_full/experiment_results.csv \
   --reference-method ILS_iRace:full \
   --paired-metric mean \
   --wilcoxon-alternative greater \
@@ -439,6 +490,20 @@ python analyze_results.py \
   --output-dir results/analysis_operator_group_ablation
 ```
 
+Analyze weak sorted initialization by combining the existing full test-set
+rows with the weak-initialization run:
+
+```bash
+python analyze_results.py \
+  --results-csv \
+    results/full_test_only.csv \
+    output/weak_sorted_init/experiment_results.csv \
+  --reference-method ILS_iRace:full \
+  --paired-metric mean \
+  --wilcoxon-alternative greater \
+  --output-dir results/analysis_weak_sorted_init
+```
+
 Each analysis writes:
 
 ```text
@@ -457,7 +522,7 @@ p_value_bh
 p_value_corrected
 ```
 
-## 12. Recommended Execution Order
+## 13. Recommended Execution Order
 
 Use this order:
 

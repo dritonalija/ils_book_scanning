@@ -11,6 +11,7 @@ Supported variants for ablation studies:
   - random_walk  : accept every perturbed candidate
   - sequential_only : use only the official sequential assignment scorer
   - ls_only      : single local-search run without the ILS loop
+  - weak_sorted_init: start ILS from the simple Sorted constructor only
 """
 
 import csv
@@ -27,6 +28,7 @@ from models.tweaks import Tweaks
 VALID_VARIANTS = {
     'full', 'no_perturb', 'no_restart', 'no_accept',
     'no_proxy', 'no_structured', 'random_walk', 'sequential_only', 'ls_only',
+    'weak_sorted_init',
 }
 
 
@@ -183,6 +185,20 @@ class Solver:
                 if self.verbose:
                     print(
                         f"Using seed solution: {seed_label} | "
+                        f"Score: {initial_solution.fitness_score:,}"
+                    )
+            elif variant == 'weak_sorted_init':
+                initial_solution = InitialSolution.generate_sorted_solution(data)
+                candidate_pool = [
+                    (
+                        initial_solution.fitness_score,
+                        "weak_sorted_init:sorted",
+                        initial_solution.clone(),
+                    )
+                ]
+                if self.verbose:
+                    print(
+                        "Using weak sorted initial solution | "
                         f"Score: {initial_solution.fitness_score:,}"
                     )
             else:
