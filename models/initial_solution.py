@@ -117,6 +117,11 @@ class InitialSolution:
         )
 
     @staticmethod
+    def generate_sorted_solution(data):
+        order = InitialSolution._build_order_sorted(data)
+        return Solution.from_order(order, data)
+
+    @staticmethod
     def _build_order_sorted(data):
         return sorted(
             range(data.num_libs),
