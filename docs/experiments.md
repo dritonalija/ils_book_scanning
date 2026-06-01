@@ -317,6 +317,7 @@ python run_experiments.py \
   --param-set irace_final \
   --variants full \
   --operator-group-ablations all \
+  --skip-full \
   --time-limit 600 \
   --init-max-time 120 \
   --runs-per-instance 10 \
@@ -332,6 +333,10 @@ drop_order_operators
 drop_insert_operators
 drop_strategic_operators
 ```
+
+Omit `--skip-full` when the base `full` run should be generated in the same
+batch. Use explicit group names instead of `all` to run only selected groups,
+for example `--operator-group-ablations order strategic`.
 
 Raw results:
 
@@ -353,6 +358,7 @@ python run_experiments.py \
   --param-set irace_final \
   --variants full \
   --operator-ablations all \
+  --skip-full \
   --time-limit 600 \
   --init-max-time 120 \
   --runs-per-instance 5 \
@@ -366,6 +372,9 @@ Raw results:
 ```text
 output/operator_ablation/experiment_results.csv
 ```
+
+Omit `--skip-full` to include the base `full` run in the same output. Use
+specific operator labels instead of `all` to test only selected operators.
 
 ## 10. Weak Initial Solution Robustness
 

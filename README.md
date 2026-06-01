@@ -635,6 +635,7 @@ python run_experiments.py \
   --param-set irace_final \
   --variants full \
   --operator-ablations all \
+  --skip-full \
   --time-limit 600 \
   --init-max-time 120 \
   --runs-per-instance 5 \

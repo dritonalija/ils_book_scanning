@@ -265,6 +265,8 @@ def build_jobs(args, instances, seeds, git_commit, git_dirty):
 
     run_specs = []
     for variant in variants:
+        if args.skip_full and variant == "full":
+            continue
         run_specs.append({
             "run_label": variant,
             "variant": variant,
@@ -520,6 +522,14 @@ def build_parser():
         nargs="+",
         default=["full"],
         choices=sorted(VALID_VARIANTS),
+    )
+    parser.add_argument(
+        "--skip-full",
+        action="store_true",
+        help=(
+            "Do not run the base full variant from --variants. Useful when "
+            "operator ablations are analyzed against an existing full run."
+        ),
     )
     parser.add_argument(
         "--component-variants",
