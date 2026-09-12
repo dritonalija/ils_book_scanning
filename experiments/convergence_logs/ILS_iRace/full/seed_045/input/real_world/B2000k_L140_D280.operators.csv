@@ -1,0 +1,14 @@
+operator,attempts,proxy_improved,exact_checked,accepted,rejected,acceptance_rate,exact_acceptance_rate
+remove_library,1056,44,456,44,1012,0.041667,0.096491
+move_signed,251,1,178,1,250,0.003984,0.005618
+swap_signed,221,2,190,2,219,0.009050,0.010526
+block_reinsert,215,1,186,1,214,0.004651,0.005376
+swap_signed_with_unsigned,674,2,3,2,672,0.002967,0.666667
+reverse_segment,122,1,103,1,121,0.008197,0.009709
+insert_library,424,2,7,2,422,0.004717,0.285714
+swap_neighbor_libraries,70,0,65,0,70,0.000000,0.000000
+critical_path_insert,295,4,4,4,291,0.013559,1.000000
+diversity_swap,207,2,6,2,205,0.009662,0.333333
+sampled_best_exchange,138,2,2,2,136,0.014493,1.000000
+coverage_exchange,0,0,0,0,0,0.000000,0.000000
+paired_choice_flip,0,0,0,0,0,0.000000,0.000000
