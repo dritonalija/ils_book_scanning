@@ -1,0 +1,43 @@
+{
+  "evaluation_instances": 68,
+  "ils_total_best_of_ten": 477429716,
+  "ils_total_run_means": 477309617.5,
+  "portfolio_total": 466414103,
+  "portfolio_better": 24,
+  "portfolio_worse": 13,
+  "portfolio_equal": 31,
+  "portfolio_gap_pct": -2.3617667066984036,
+  "portfolio_p_exact": 0.00021763458789791912,
+  "component_ablation": {
+    "family_size": 4,
+    "p_exact": {
+      "ls_only": 1.4551915228366852e-11,
+      "no_accept": 0.9307350646704435,
+      "no_perturb": 0.11945036612451077,
+      "no_restart": 0.31757172010838985
+    },
+    "p_holm": {
+      "ls_only": 5.820766091346741e-11,
+      "no_perturb": 0.3583510983735323,
+      "no_restart": 0.6351434402167797,
+      "no_accept": 0.9307350646704435
+    }
+  },
+  "operator_group_ablation": {
+    "family_size": 3,
+    "p_exact": {
+      "drop_insert_operators": 9.313225746154785e-09,
+      "drop_order_operators": 0.9153939224779606,
+      "drop_strategic_operators": 0.529405927285552
+    },
+    "p_holm": {
+      "drop_insert_operators": 2.7939677238464355e-08,
+      "drop_strategic_operators": 1.0,
+      "drop_order_operators": 1.0
+    }
+  },
+  "weak_start": {
+    "p_exact": 0.06784779019653797,
+    "gap_pct": -0.12865257281355302
+  }
+}

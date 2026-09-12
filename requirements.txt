@@ -3,8 +3,11 @@ numpy==2.4.4
 numba==0.65.0
 llvmlite==0.47.0
 
-# Analysis and verification tools.
-pandas
-scipy
-matplotlib
+# Analysis and verification tools. These are the versions the published
+# summaries were produced and checked with. scipy is the one that matters:
+# it renamed the Wilcoxon null-distribution selector from `mode` to `method`,
+# and the analysis scripts pick the right name for the installed version.
+pandas==2.1.4
+scipy==1.10.1
+matplotlib==3.8.2
 pytest

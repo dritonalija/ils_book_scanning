@@ -6,3 +6,6 @@ irace_output/
 logs/
 seed/
 results/
+
+# Rebuilt from experiments/output_csv/ by export_result_tables.py.
+experiments/result_tables/
