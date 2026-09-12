@@ -31,6 +31,7 @@ perturbation, and multi-start restarts after prolonged stagnation.
     - [Perturbation types](#perturbation-types)
   - [Restart Strategy](#restart-strategy)
   - [Instance Profiles](#instance-profiles)
+  - [Reproduce The Results](#reproduce-the-results)
   - [Experimental Protocol](#experimental-protocol)
   - [CLI Usage](#cli-usage)
     - [Single instance](#single-instance)
@@ -537,6 +538,40 @@ These profiles set defaults for:
 
 This keeps the strategy mostly dependent on instance size rather than on a
 single fixed parameter set.
+
+## Reproduce The Results
+
+Every experiment record is in `experiments/`, so the published results can be
+rebuilt from a fresh clone without running a single experiment again:
+
+```bash
+pip install -r requirements.txt
+
+python build_instance_catalog.py   # measure the 324 instances
+python export_result_tables.py     # raw run exports -> tidy per-seed tables
+python analyze_convergence.py      # convergence logs -> checkpoint and operator summaries
+python verify_results.py           # recompute the headline results, exit 1 on any change
+```
+
+`verify_results.py` prints one line per check and compares each value against
+`experiments/expected_results.json`. Use `--update` to rewrite that baseline
+after a change you intend.
+
+For the paired tests, `analyze_results.py` runs a two-sided exact Wilcoxon
+signed-rank test over the nonzero differences, then applies Holm and BH
+corrections. `--test-family source` (the default) treats each result file as
+its own family, so loading several batches in one run corrects each batch
+separately instead of pooling unrelated comparisons:
+
+```bash
+python analyze_results.py \
+  --results-csv experiments/output_csv/experiments_full/experiment_results.csv \
+                experiments/output_csv/component_ablation/experiment_results.csv \
+  --output-dir results/analysis_component_ablation
+```
+
+`experiments/README.md` describes every record set and names the script that
+builds each derived file.
 
 ## Experimental Protocol
 

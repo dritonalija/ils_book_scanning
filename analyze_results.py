@@ -4,10 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 from pathlib import Path
 
 import pandas as pd
 from scipy.stats import friedmanchisquare, wilcoxon
+
+# scipy renamed the null-distribution selector from ``mode`` to ``method`` in
+# 1.12. Detect the right keyword so that requesting the exact null distribution
+# never silently falls back to the normal approximation, which "auto" does as
+# soon as the number of nonzero pairs grows past its internal threshold.
+WILCOXON_NULL_KW = (
+    "method" if "method" in inspect.signature(wilcoxon).parameters else "mode"
+)
 
 
 def load_results(paths):
@@ -212,13 +221,25 @@ def adjusted_p_values(p_values, method):
     raise ValueError(f"Unknown p-value adjustment method: {method}")
 
 
-def add_p_value_corrections(tests):
+def add_p_value_corrections(tests, family_by_method=None):
+    """Correct the p-values inside each test family.
+
+    A family is the set of tests that answer one question together. Holm
+    divides by the family size, so a family that pools unrelated comparisons
+    corrects harder than it should. When ``family_by_method`` is given, each
+    comparison belongs to the result file it came from and each file is its own
+    family. Without it, every comparison on a dataset forms one family, which
+    is correct only when the run covers a single experiment batch.
+    """
     if tests.empty:
         return tests
     tests = tests.copy()
     tests["p_value_holm"] = pd.NA
     tests["p_value_bh"] = pd.NA
     group_cols = ["dataset", "reference_method", "alternative"]
+    if family_by_method is not None:
+        tests["test_family"] = tests["comparison_method"].map(family_by_method)
+        group_cols = [*group_cols, "test_family"]
     for _key, idx in tests.groupby(group_cols, dropna=False).groups.items():
         positions = list(idx)
         p_values = tests.loc[positions, "p_value"].tolist()
@@ -229,7 +250,8 @@ def add_p_value_corrections(tests):
     return tests
 
 
-def wilcoxon_table(per_instance, reference_method, alternative):
+def wilcoxon_table(per_instance, reference_method, alternative,
+                   null_distribution="exact"):
     methods = sorted(method for method in per_instance["method"].unique()
                      if method != reference_method)
     rows = []
@@ -258,11 +280,17 @@ def wilcoxon_table(per_instance, reference_method, alternative):
                 statistic = 0.0
                 p_value = 1.0
             else:
+                # Drop the zero differences before the call rather than relying
+                # on zero_method="wilcox": scipy refuses the exact null whenever
+                # zeros are still present in the input and falls back to the
+                # normal approximation with a warning. The manuscript defines
+                # the test on the nonzero paired differences, so filtering here
+                # is both what is reported and what keeps "exact" effective.
                 statistic, p_value = wilcoxon(
-                    merged["reference_score"],
-                    merged["comparison_score"],
+                    non_zero,
                     alternative=alternative,
                     zero_method="wilcox",
+                    **{WILCOXON_NULL_KW: null_distribution},
                 )
             wins = int((diff > 0).sum())
             losses = int((diff < 0).sum())
@@ -288,6 +316,7 @@ def wilcoxon_table(per_instance, reference_method, alternative):
                 "wilcoxon_statistic": statistic,
                 "p_value": p_value,
                 "alternative": alternative,
+                "null_distribution": null_distribution,
             })
     return pd.DataFrame(rows)
 
@@ -351,8 +380,29 @@ def build_parser():
     parser.add_argument(
         "--wilcoxon-alternative",
         choices=["two-sided", "greater", "less"],
-        default="greater",
-        help="'greater' tests whether reference scores are larger.",
+        default="two-sided",
+        help=("Signed-rank alternative. The thesis and the manuscript report "
+              "two-sided tests; 'greater' tests whether reference scores are "
+              "larger and is kept only for exploratory use."),
+    )
+    parser.add_argument(
+        "--wilcoxon-null",
+        choices=["exact", "approx", "auto"],
+        default="exact",
+        help=("Null distribution of the signed-rank statistic. 'exact' matches "
+              "the reported results at any number of nonzero pairs; 'auto' "
+              "silently switches to the normal approximation for large "
+              "samples."),
+    )
+    parser.add_argument(
+        "--test-family",
+        choices=["source", "dataset"],
+        default="source",
+        help=("Scope of the Holm and BH corrections. 'source' treats each "
+              "result file as its own family, so a run that loads several "
+              "experiment batches corrects each batch separately. 'dataset' "
+              "pools every comparison on a dataset into one family, which "
+              "over-corrects when batches are mixed."),
     )
     return parser
 
@@ -370,8 +420,16 @@ def main():
         per_instance,
         args.reference_method,
         args.wilcoxon_alternative,
+        args.wilcoxon_null,
     )
-    tests = add_p_value_corrections(tests)
+    family_by_method = None
+    if args.test_family == "source":
+        family_by_method = (
+            data.drop_duplicates("method")
+            .set_index("method")["source_csv"]
+            .to_dict()
+        )
+    tests = add_p_value_corrections(tests, family_by_method)
     friedman = friedman_table(per_instance)
 
     per_instance.to_csv(output_dir / "per_instance_summary.csv", index=False)
